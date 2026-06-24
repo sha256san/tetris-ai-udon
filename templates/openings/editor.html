@@ -1,0 +1,1428 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Antigravity Tetris Opening Editor</title>
+    <!-- Outifit / Inter Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --bg-color: #0d0e12;
+            --panel-bg: #161822;
+            --border-color: #2b2e40;
+            --accent-color: #4b6ef5;
+            --accent-glow: rgba(75, 110, 245, 0.4);
+            --text-primary: #e4e7eb;
+            --text-secondary: #8892b0;
+            
+            /* Tetris Piece Colors */
+            --color-0: #1a1b26;
+            --color-i: #00f0f0;
+            --color-o: #f0f000;
+            --color-t: #a000f0;
+            --color-s: #00f000;
+            --color-z: #f00000;
+            --color-j: #0000f0;
+            --color-l: #f0a000;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+
+        header {
+            background-color: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1.2rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            font-size: 1.6rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #00f0f0 0%, #4b6ef5 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: 0.5px;
+        }
+
+        .subtitle {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        main {
+            flex: 1;
+            display: flex;
+            padding: 2rem;
+            gap: 2rem;
+            max-width: 1600px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        .editor-container {
+            display: flex;
+            gap: 2rem;
+            flex: 1;
+        }
+
+        /* 左パネル: エディタグリッド */
+        .grid-panel {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+            min-width: 400px;
+        }
+
+        .grid-settings {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            width: 100%;
+        }
+
+        .setting-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: 100%;
+        }
+
+        .grid-settings label {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .grid-settings select {
+            background-color: var(--bg-color);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            outline: none;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .grid-settings select:hover, .grid-settings select:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 10px var(--accent-glow);
+        }
+
+        /* ブランチ管理UI */
+        .branch-section {
+            border-top: 1px solid var(--border-color);
+            padding-top: 1rem;
+            margin-top: 0.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+            width: 100%;
+        }
+
+        .branch-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .branch-title {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .branch-btn-group {
+            display: flex;
+            gap: 0.4rem;
+        }
+
+        .branch-mini-btn {
+            background-color: var(--border-color);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 0.25rem 0.6rem;
+            border-radius: 4px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.75rem;
+            transition: all 0.2s ease;
+        }
+
+        .branch-mini-btn:hover {
+            border-color: var(--text-secondary);
+        }
+
+        .branch-mini-btn.add {
+            background-color: var(--accent-color);
+            border-color: var(--accent-color);
+            color: white;
+        }
+
+        .branch-mini-btn.add:hover {
+            box-shadow: 0 0 8px var(--accent-glow);
+        }
+
+        .branch-mini-btn.del {
+            background-color: #ff5555;
+            border-color: #ff5555;
+            color: white;
+        }
+
+        .branch-mini-btn.del:hover {
+            box-shadow: 0 0 8px rgba(255, 85, 85, 0.4);
+        }
+
+        .branch-tabs {
+            display: flex;
+            gap: 0.4rem;
+            overflow-x: auto;
+            padding-bottom: 0.3rem;
+            width: 100%;
+        }
+
+        .branch-tab {
+            background-color: var(--bg-color);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: 600;
+            white-space: nowrap;
+            transition: all 0.2s ease;
+        }
+
+        .branch-tab:hover {
+            border-color: var(--text-secondary);
+        }
+
+        .branch-tab.active {
+            background-color: var(--border-color);
+            border-color: var(--accent-color);
+            color: #fff;
+            box-shadow: 0 0 8px var(--accent-glow);
+        }
+
+        .branch-cond-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+            background-color: var(--bg-color);
+            padding: 0.8rem;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .branch-cond-group label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        .branch-cond-input {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 0.4rem 0.6rem;
+            border-radius: 6px;
+            outline: none;
+            font-size: 0.85rem;
+            font-family: 'Roboto Mono', monospace;
+            transition: all 0.3s ease;
+        }
+
+        .branch-cond-input:focus {
+            border-color: var(--accent-color);
+        }
+
+        /* パレット */
+        .palette {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 1.5rem;
+            background-color: var(--bg-color);
+            padding: 10px;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            width: 100%;
+            justify-content: center;
+        }
+
+        .palette-item {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            border: 2px solid transparent;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            transition: all 0.2s ease;
+            box-shadow: inset 0 2px 4px rgba(255,255,255,0.1), 0 2px 8px rgba(0,0,0,0.2);
+        }
+
+        .palette-item:hover {
+            transform: scale(1.1);
+        }
+
+        .palette-item.active {
+            border-color: #fff;
+            transform: scale(1.15);
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.4);
+        }
+
+        .palette-0 { background-color: var(--color-0); color: #444a66; border: 1px dashed var(--border-color); }
+        .palette-i { background-color: var(--color-i); color: #000; }
+        .palette-o { background-color: var(--color-o); color: #000; }
+        .palette-t { background-color: var(--color-t); color: #fff; }
+        .palette-s { background-color: var(--color-s); color: #000; }
+        .palette-z { background-color: var(--color-z); color: #fff; }
+        .palette-j { background-color: var(--color-j); color: #fff; }
+        .palette-l { background-color: var(--color-l); color: #000; }
+
+        /* グリッド本体 */
+        .tetris-grid {
+            display: grid;
+            grid-template-columns: repeat(10, 1fr);
+            gap: 2px;
+            background-color: var(--border-color);
+            padding: 2px;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+            user-select: none;
+            -webkit-user-drag: none;
+        }
+
+        .grid-cell {
+            width: 30px;
+            height: 30px;
+            border-radius: 4px;
+            background-color: var(--color-0);
+            cursor: pointer;
+            transition: background-color 0.1s ease, transform 0.1s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7rem;
+            font-weight: 800;
+            color: rgba(255,255,255,0.08);
+            text-transform: uppercase;
+        }
+
+        .grid-cell:hover {
+            filter: brightness(1.2);
+            transform: scale(1.05);
+        }
+
+        /* セルの色 */
+        .cell-i { background-color: var(--color-i); color: rgba(0,0,0,0.3); }
+        .cell-o { background-color: var(--color-o); color: rgba(0,0,0,0.3); }
+        .cell-t { background-color: var(--color-t); color: rgba(255,255,255,0.4); }
+        .cell-s { background-color: var(--color-s); color: rgba(0,0,0,0.3); }
+        .cell-z { background-color: var(--color-z); color: rgba(255,255,255,0.4); }
+        .cell-j { background-color: var(--color-j); color: rgba(255,255,255,0.4); }
+        .cell-l { background-color: var(--color-l); color: rgba(0,0,0,0.3); }
+
+        /* 非アクティブ巡目のプレビュースタイル */
+        .cell-preview {
+            /* プレビュー表示されていてもセルをクリックして編集できるようにする */
+            position: relative;
+        }
+        .preview-bag1 {
+            opacity: 0.55;
+        }
+        .preview-bag2 {
+            opacity: 0.55;
+            background-image: repeating-linear-gradient(45deg, transparent, transparent 5px, rgba(0,0,0,0.45) 5px, rgba(0,0,0,0.45) 10px);
+        }
+        .preview-bag3 {
+            opacity: 0.35;
+            background-image: repeating-linear-gradient(-45deg, transparent, transparent 4px, rgba(0,0,0,0.55) 4px, rgba(0,0,0,0.55) 8px);
+        }
+
+        .clear-btn {
+            margin-top: 1.5rem;
+            width: 100%;
+            background-color: transparent;
+            border: 1px solid var(--border-color);
+            color: #ff5555;
+            padding: 0.7rem;
+            border-radius: 8px;
+            font-family: inherit;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .clear-btn:hover {
+            background-color: #ff555515;
+            border-color: #ff5555;
+        }
+
+        /* 右パネル: 設定 & JSON */
+        .settings-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .panel {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.8rem;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+        }
+
+        .panel-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 1.2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            color: var(--accent-color);
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.5rem;
+        }
+
+        /* フォーム */
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1.2rem;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+
+        .form-group.full-width {
+            grid-column: span 2;
+        }
+
+        .form-group label {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .form-group input, .form-group textarea {
+            background-color: var(--bg-color);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 0.7rem;
+            border-radius: 8px;
+            font-family: inherit;
+            outline: none;
+            transition: all 0.3s ease;
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 60px;
+        }
+
+        .form-group input:focus, .form-group textarea:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 10px var(--accent-glow);
+        }
+
+        /* JSON 出力 */
+        .json-output-area {
+            position: relative;
+        }
+
+        .json-textarea {
+            width: 100%;
+            height: 250px;
+            background-color: var(--bg-color);
+            border: 1px solid var(--border-color);
+            color: #5af78e;
+            font-family: 'Roboto Mono', monospace;
+            font-size: 0.85rem;
+            padding: 1rem;
+            border-radius: 8px;
+            outline: none;
+            resize: none;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .primary-btn {
+            flex: 1;
+            background: linear-gradient(135deg, #4b6ef5 0%, #3b5bdb 100%);
+            color: #fff;
+            border: none;
+            padding: 0.8rem;
+            border-radius: 8px;
+            font-family: inherit;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(75, 110, 245, 0.3);
+        }
+
+        .primary-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(75, 110, 245, 0.4);
+        }
+
+        .secondary-btn {
+            flex: 1;
+            background-color: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 0.8rem;
+            border-radius: 8px;
+            font-family: inherit;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .secondary-btn:hover {
+            background-color: var(--border-color);
+        }
+
+        /* 警告・バリデーション */
+        .validation-panel {
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            border: 1px solid transparent;
+        }
+
+        .validation-panel.success {
+            background-color: rgba(46, 204, 113, 0.15);
+            border-color: #2ecc71;
+            color: #2ecc71;
+        }
+
+        .validation-panel.warning {
+            background-color: rgba(241, 196, 15, 0.15);
+            border-color: #f1c40f;
+            color: #f1c40f;
+        }
+
+        .validation-panel ul {
+            padding-left: 1.2rem;
+        }
+
+        /* ショートカット案内 */
+        .shortcuts-info {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-top: 1.5rem;
+            text-align: center;
+            border-top: 1px solid var(--border-color);
+            padding-top: 1rem;
+            width: 100%;
+        }
+
+        .shortcuts-info kbd {
+            background-color: var(--border-color);
+            color: var(--text-primary);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Roboto Mono', monospace;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div>
+            <h1>ANTIGRAPVITY TETRIS AI</h1>
+            <div class="subtitle">Opening Board Map Grid Editor</div>
+        </div>
+        <div style="font-size: 0.8rem; color: var(--text-secondary);">
+            Antigravity IDE Integration v1.1
+        </div>
+    </header>
+
+    <main>
+        <div class="editor-container">
+            <!-- 左側: グリッド描画 -->
+            <div class="grid-panel">
+                <div class="grid-settings">
+                    <div class="setting-row">
+                        <label for="height-select">Grid Height (Rows):</label>
+                        <select id="height-select">
+                            <option value="4">4 Rows (Compact)</option>
+                            <option value="5">5 Rows (C4W / Standard)</option>
+                            <option value="8">8 Rows</option>
+                            <option value="10" selected>10 Rows</option>
+                            <option value="15">15 Rows</option>
+                            <option value="20">20 Rows (Full Board)</option>
+                        </select>
+                    </div>
+
+                    <!-- ブランチ（条件分岐）管理UI -->
+                    <div class="branch-section">
+                        <div class="branch-header">
+                            <span class="branch-title">Branches (Conditional):</span>
+                            <div class="branch-btn-group">
+                                <button id="add-branch-btn" class="branch-mini-btn add">+ Add</button>
+                                <button id="remove-branch-btn" class="branch-mini-btn del">- Del</button>
+                            </div>
+                        </div>
+                        <div id="branch-tabs" class="branch-tabs">
+                            <!-- タブはJS側で動的生成 -->
+                        </div>
+                        <div id="branch-cond-group" class="branch-cond-group" style="display: none;">
+                            <label for="branch-cond-input">Branch Condition (e.g. <code>L &lt; J</code>, comma separated):</label>
+                            <input type="text" id="branch-cond-input" class="branch-cond-input" placeholder="L < J">
+                        </div>
+                    </div>
+
+                    <!-- Bag（巡目）選択UI -->
+                    <div class="branch-section" style="border-top: 1px solid var(--border-color); margin-top: 0.8rem; padding-top: 0.8rem;">
+                        <div class="branch-header">
+                            <span class="branch-title">Bag Loop (巡目):</span>
+                        </div>
+                        <div id="bag-tabs" class="branch-tabs">
+                            <button class="branch-tab active" data-bag="0">1st Bag (1巡目)</button>
+                            <button class="branch-tab" data-bag="1">2nd Bag (2巡目)</button>
+                            <button class="branch-tab" data-bag="2">3rd Bag (3巡目)</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- パレット -->
+                <div class="palette">
+                    <div class="palette-item palette-0 active" data-type="0">0</div>
+                    <div class="palette-item palette-i" data-type="i">i</div>
+                    <div class="palette-item palette-o" data-type="o">o</div>
+                    <div class="palette-item palette-t" data-type="t">t</div>
+                    <div class="palette-item palette-s" data-type="s">s</div>
+                    <div class="palette-item palette-z" data-type="z">z</div>
+                    <div class="palette-item palette-j" data-type="j">j</div>
+                    <div class="palette-item palette-l" data-type="l">l</div>
+                </div>
+
+                <!-- テトリスグリッド -->
+                <div id="tetris-grid" class="tetris-grid"></div>
+
+                <div style="display: flex; gap: 1rem; width: 100%; margin-top: 1.5rem;">
+                    <button id="mirror-btn" class="secondary-btn" style="flex: 1; border-color: var(--accent-color); color: var(--accent-color);">Mirror Current Grid</button>
+                    <button id="clear-btn" class="clear-btn" style="flex: 1; margin-top: 0;">Clear Current Grid</button>
+                </div>
+
+                <div class="shortcuts-info">
+                    Keyboard Shortcuts: <kbd>0</kbd>〜<kbd>7</kbd> or <kbd>I</kbd>,<kbd>O</kbd>,<kbd>T</kbd>,<kbd>S</kbd>,<kbd>Z</kbd>,<kbd>J</kbd>,<kbd>L</kbd> to change palette
+                </div>
+            </div>
+
+            <!-- 右側: メタデータ設定 & 出力 -->
+            <div class="settings-panel">
+                <div class="panel">
+                    <div class="panel-title">Opening Metadata</div>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="meta-name">Template Name</label>
+                            <input type="text" id="meta-name" value="Custom Stacking">
+                        </div>
+                        <div class="form-group">
+                            <label for="meta-lines">Active Until Lines</label>
+                            <input type="number" id="meta-lines" value="8" min="1">
+                        </div>
+                        <div class="form-group full-width">
+                            <label for="meta-desc">Description</label>
+                            <textarea id="meta-desc">Custom opening template designed using Antigravity Editor.</textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="meta-seq-bonus">Sequence Match Bonus</label>
+                            <input type="number" id="meta-seq-bonus" value="30.0" step="0.5">
+                        </div>
+                        <div class="form-group">
+                            <label for="meta-col-bonus">Bonus Per Column</label>
+                            <input type="number" id="meta-col-bonus" value="5.0" step="0.5">
+                        </div>
+                        <div class="form-group full-width">
+                            <label for="meta-weights">Opening Heuristic Weights (8 floats)</label>
+                            <input type="text" id="meta-weights" value="-2.0, -0.5, -0.8, -7.5, -2.0, 0.5, 0.0, 100.0">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- バリデーション結果 -->
+                <div id="validation-panel" class="validation-panel success">
+                    Checking layout...
+                </div>
+
+                <div class="panel">
+                    <div class="panel-title">JSON Export / Import</div>
+                    <div class="json-output-area">
+                        <textarea id="json-textarea" class="json-textarea" spellcheck="false"></textarea>
+                    </div>
+                    <div class="btn-group">
+                        <button id="copy-btn" class="primary-btn">Copy JSON</button>
+                        <button id="import-btn" class="secondary-btn">Import from Copy</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // 定数
+        const BOARD_WIDTH = 10;
+        let boardHeight = 10; // 初期設定行数
+
+        // 状態: 複数ブランチに対応
+        let branches = [
+            {
+                conditions: [],
+                grids: [
+                    Array(boardHeight).fill().map(() => Array(BOARD_WIDTH).fill('0')),
+                    Array(boardHeight).fill().map(() => Array(BOARD_WIDTH).fill('0')),
+                    Array(boardHeight).fill().map(() => Array(BOARD_WIDTH).fill('0'))
+                ]
+            }
+        ];
+        let activeBranchIdx = 0;
+        let activeBagIdx = 0; // 0: 1巡目, 1: 2巡目, 2: 3巡目
+
+        let selectedPalette = '0';
+        let isMouseDown = false;
+
+        // ミノ種ごとの色マッピング
+        const typeClasses = {
+            '0': 'cell-0',
+            'i': 'cell-i',
+            'o': 'cell-o',
+            't': 'cell-t',
+            's': 'cell-s',
+            'z': 'cell-z',
+            'j': 'cell-j',
+            'l': 'cell-l'
+        };
+
+        // テトリミノ定義と回転パターン
+        const PIECE_SHAPES = {
+            i: [
+                [[0,0], [1,0], [2,0], [3,0]],
+                [[0,0], [0,1], [0,2], [0,3]]
+            ],
+            o: [
+                [[0,0], [1,0], [0,1], [1,1]]
+            ],
+            t: [
+                [[1,0], [0,1], [1,1], [2,1]],
+                [[0,0], [0,1], [1,1], [0,2]],
+                [[0,0], [1,0], [2,0], [1,1]],
+                [[1,0], [0,1], [1,1], [1,2]]
+            ],
+            s: [
+                [[1,0], [2,0], [0,1], [1,1]],
+                [[0,0], [0,1], [1,1], [1,2]]
+            ],
+            z: [
+                [[0,0], [1,0], [1,1], [2,1]],
+                [[1,0], [0,1], [1,1], [0,2]]
+            ],
+            j: [
+                [[0,0], [0,1], [1,1], [2,1]],
+                [[0,0], [1,0], [0,1], [0,2]],
+                [[0,0], [1,0], [2,0], [2,1]],
+                [[1,0], [1,1], [0,2], [1,2]]
+            ],
+            l: [
+                [[2,0], [0,1], [1,1], [2,1]],
+                [[0,0], [0,1], [0,2], [1,2]],
+                [[0,0], [1,0], [2,0], [0,1]],
+                [[0,0], [1,0], [1,1], [1,2]]
+            ]
+        };
+
+        // DOMの取得
+        const gridElement = document.getElementById('tetris-grid');
+        const heightSelect = document.getElementById('height-select');
+        const paletteItems = document.querySelectorAll('.palette-item');
+        const clearBtn = document.getElementById('clear-btn');
+        const mirrorBtn = document.getElementById('mirror-btn');
+        const jsonTextarea = document.getElementById('json-textarea');
+        const copyBtn = document.getElementById('copy-btn');
+        const importBtn = document.getElementById('import-btn');
+        const validationPanel = document.getElementById('validation-panel');
+
+        // ブランチUI
+        const addBranchBtn = document.getElementById('add-branch-btn');
+        const removeBranchBtn = document.getElementById('remove-branch-btn');
+        const branchTabs = document.getElementById('branch-tabs');
+        const branchCondGroup = document.getElementById('branch-cond-group');
+        const branchCondInput = document.getElementById('branch-cond-input');
+        const bagTabsContainer = document.getElementById('bag-tabs');
+
+        // メタデータ入力
+        const metaName = document.getElementById('meta-name');
+        const metaLines = document.getElementById('meta-lines');
+        const metaDesc = document.getElementById('meta-desc');
+        const metaSeqBonus = document.getElementById('meta-seq-bonus');
+        const metaColBonus = document.getElementById('meta-col-bonus');
+        const metaWeights = document.getElementById('meta-weights');
+
+        // 初期化
+        function init() {
+            renderBranchTabs();
+            renderBagTabs();
+            createGrid();
+            setupEventListeners();
+            updateJSON();
+            validateGrid();
+        }
+
+        // ブランチタブの描画
+        function renderBranchTabs() {
+            branchTabs.innerHTML = '';
+            branches.forEach((b, idx) => {
+                const tab = document.createElement('button');
+                tab.className = `branch-tab ${idx === activeBranchIdx ? 'active' : ''}`;
+                tab.dataset.idx = idx;
+                
+                const condText = b.conditions.length > 0 ? b.conditions.join(', ') : 'Default';
+                tab.textContent = `Branch #${idx + 1} (${condText})`;
+                
+                tab.addEventListener('click', () => {
+                    activeBranchIdx = idx;
+                    renderBranchTabs();
+                    createGrid();
+                    updateBranchCondUI();
+                    validateGrid();
+                });
+                
+                branchTabs.appendChild(tab);
+            });
+            updateBranchCondUI();
+        }
+
+        // 巡目（Bag）タブの描画と選択
+        function renderBagTabs() {
+            if (!bagTabsContainer) return;
+            const tabs = bagTabsContainer.querySelectorAll('.branch-tab');
+            tabs.forEach(tab => {
+                const bagIdx = parseInt(tab.dataset.bag);
+                if (bagIdx === activeBagIdx) {
+                    tab.classList.add('active');
+                } else {
+                    tab.classList.remove('active');
+                }
+            });
+        }
+
+        // 条件入力UIの表示・非表示
+        function updateBranchCondUI() {
+            if (branches.length > 1) {
+                branchCondGroup.style.display = 'flex';
+                branchCondInput.value = branches[activeBranchIdx].conditions.join(', ');
+            } else {
+                branchCondGroup.style.display = 'none';
+                branchCondInput.value = '';
+            }
+        }
+
+        // グリッド要素の作成
+        function createGrid() {
+            gridElement.innerHTML = '';
+            gridElement.style.gridTemplateRows = `repeat(${boardHeight}, 1fr)`;
+            
+            const activeGrid = branches[activeBranchIdx].grids[activeBagIdx];
+            const allGrids = branches[activeBranchIdx].grids;
+            
+            for (let r = 0; r < boardHeight; r++) {
+                for (let c = 0; c < BOARD_WIDTH; c++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'grid-cell';
+                    cell.dataset.row = r;
+                    cell.dataset.col = c;
+                    
+                    const char = activeGrid[r][c];
+                    if (char !== '0') {
+                        cell.classList.add(typeClasses[char]);
+                        cell.textContent = char;
+                    } else {
+                        // アクティブなBagが空の場合、非アクティブなBagのプレビューを表示する
+                        let previewChar = '0';
+                        let previewBagIdx = -1;
+                        // 1巡目 -> 2巡目 -> 3巡目の優先順位で最初に配置があるものを探す
+                        for (let b = 0; b < 3; b++) {
+                            if (b !== activeBagIdx && allGrids[b][r][c] !== '0') {
+                                previewChar = allGrids[b][r][c];
+                                previewBagIdx = b;
+                                break;
+                            }
+                        }
+
+                        if (previewChar !== '0') {
+                            cell.classList.add(typeClasses[previewChar]);
+                            cell.classList.add('cell-preview');
+                            cell.classList.add(`preview-bag${previewBagIdx + 1}`);
+                            cell.textContent = previewChar;
+                        } else {
+                            cell.textContent = '';
+                        }
+                    }
+                    
+                    gridElement.appendChild(cell);
+                }
+            }
+        }
+
+        // イベントリスナーの設定
+        function setupEventListeners() {
+            // マウスドラッグで塗るためのフラグ
+            window.addEventListener('mousedown', () => isMouseDown = true);
+            window.addEventListener('mouseup', () => isMouseDown = false);
+
+            gridElement.addEventListener('mousedown', (e) => {
+                const cell = e.target.closest('.grid-cell');
+                if (cell) {
+                    paintCell(cell);
+                }
+            });
+
+            gridElement.addEventListener('mouseover', (e) => {
+                if (isMouseDown) {
+                    const cell = e.target.closest('.grid-cell');
+                    if (cell) {
+                        paintCell(cell);
+                    }
+                }
+            });
+
+            // パレット選択
+            paletteItems.forEach(item => {
+                item.addEventListener('click', () => {
+                    paletteItems.forEach(i => i.classList.remove('active'));
+                    item.classList.add('active');
+                    selectedPalette = item.dataset.type;
+                });
+            });
+
+            // キーボードショートカット
+            window.addEventListener('keydown', (e) => {
+                const key = e.key.toLowerCase();
+                let type = null;
+                
+                if (key === '0' || key === 'space' || key === 'escape') type = '0';
+                else if (key === '1' || key === 'i') type = 'i';
+                else if (key === '2' || key === 'o') type = 'o';
+                else if (key === '3' || key === 't') type = 't';
+                else if (key === '4' || key === 's') type = 's';
+                else if (key === '5' || key === 'z') type = 'z';
+                else if (key === '6' || key === 'j') type = 'j';
+                else if (key === '7' || key === 'l') type = 'l';
+
+                if (type !== null) {
+                    const btn = document.querySelector(`.palette-item[data-type="${type}"]`);
+                    if (btn) btn.click();
+                }
+            });
+
+            // 高さ変更
+            heightSelect.addEventListener('change', (e) => {
+                const newHeight = parseInt(e.target.value);
+                adjustGridHeight(newHeight);
+            });
+
+            // 左右反転
+            mirrorBtn.addEventListener('click', () => {
+                mirrorCurrentGrid();
+            });
+
+            // クリア
+            clearBtn.addEventListener('click', () => {
+                if (confirm('Are you sure you want to clear the current branch grid?')) {
+                    branches[activeBranchIdx].grids[activeBagIdx] = Array(boardHeight).fill().map(() => Array(BOARD_WIDTH).fill('0'));
+                    createGrid();
+                    updateJSON();
+                    validateGrid();
+                }
+            });
+
+            // ブランチ追加
+            addBranchBtn.addEventListener('click', () => {
+                // 現在のグリッドデータをコピーして追加
+                const currentGridsCopy = branches[activeBranchIdx].grids.map(grid => grid.map(row => [...row]));
+                branches.push({
+                    conditions: [`L < J`], // デフォルト条件
+                    grids: currentGridsCopy
+                });
+                activeBranchIdx = branches.length - 1;
+                renderBranchTabs();
+                createGrid();
+                updateJSON();
+                validateGrid();
+            });
+
+            // ブランチ削除
+            removeBranchBtn.addEventListener('click', () => {
+                if (branches.length <= 1) {
+                    alert('Cannot delete the last branch.');
+                    return;
+                }
+                if (confirm(`Are you sure you want to delete Branch #${activeBranchIdx + 1}?`)) {
+                    branches.splice(activeBranchIdx, 1);
+                    activeBranchIdx = Math.max(0, activeBranchIdx - 1);
+                    renderBranchTabs();
+                    createGrid();
+                    updateJSON();
+                    validateGrid();
+                }
+            });
+
+            // 条件入力変更
+            branchCondInput.addEventListener('input', (e) => {
+                const val = e.target.value;
+                branches[activeBranchIdx].conditions = val.split(',')
+                    .map(s => s.trim())
+                    .filter(s => s.length > 0);
+                
+                // タブテキスト更新のために部分再描画
+                const tab = branchTabs.children[activeBranchIdx];
+                if (tab) {
+                    const condText = branches[activeBranchIdx].conditions.length > 0 ? branches[activeBranchIdx].conditions.join(', ') : 'Default';
+                    tab.textContent = `Branch #${activeBranchIdx + 1} (${condText})`;
+                }
+                updateJSON();
+            });
+
+            // JSONコピー
+            copyBtn.addEventListener('click', () => {
+                jsonTextarea.select();
+                document.execCommand('copy');
+                const prevText = copyBtn.textContent;
+                copyBtn.textContent = 'Copied!';
+                copyBtn.style.background = '#2ecc71';
+                setTimeout(() => {
+                    copyBtn.textContent = prevText;
+                    copyBtn.style.background = '';
+                }, 1500);
+            });
+
+            // インポート
+            importBtn.addEventListener('click', () => {
+                try {
+                    const json = JSON.parse(jsonTextarea.value);
+                    
+                    // メタデータの復元
+                    if (json.name) metaName.value = json.name;
+                    if (json.active_until_lines) metaLines.value = json.active_until_lines;
+                    if (json.description) metaDesc.value = json.description;
+                    if (json.sequence_match_bonus) metaSeqBonus.value = json.sequence_match_bonus;
+                    if (json.opening_bonus_per_column) metaColBonus.value = json.opening_bonus_per_column;
+                    if (json.opening_weights && Array.isArray(json.opening_weights)) {
+                        metaWeights.value = json.opening_weights.join(', ');
+                    }
+
+                    // ブランチ情報のパース
+                    if (json.branches && Array.isArray(json.branches)) {
+                        // 複数ブランチあり
+                        const firstBranch = json.branches[0];
+                        const firstMap = firstBranch.board_maps ? firstBranch.board_maps[0] : firstBranch.board_map;
+                        boardHeight = firstMap.length;
+                        heightSelect.value = boardHeight;
+                        
+                        branches = json.branches.map(b => {
+                            let grids = [];
+                            if (b.board_maps && Array.isArray(b.board_maps)) {
+                                grids = b.board_maps.map(rowMap => rowMap.map(rowStr => rowStr.toLowerCase().split('').slice(0, BOARD_WIDTH)));
+                            } else if (b.board_map && Array.isArray(b.board_map)) {
+                                grids = [
+                                    b.board_map.map(rowStr => rowStr.toLowerCase().split('').slice(0, BOARD_WIDTH)),
+                                    Array(boardHeight).fill().map(() => Array(BOARD_WIDTH).fill('0')),
+                                    Array(boardHeight).fill().map(() => Array(BOARD_WIDTH).fill('0'))
+                                ];
+                            }
+                            while (grids.length < 3) {
+                                grids.push(Array(boardHeight).fill().map(() => Array(BOARD_WIDTH).fill('0')));
+                            }
+                            return {
+                                conditions: b.conditions || [],
+                                grids: grids
+                            };
+                        });
+                        activeBranchIdx = 0;
+                        activeBagIdx = 0;
+                    } else if ((json.board_maps && Array.isArray(json.board_maps)) || (json.board_map && Array.isArray(json.board_map))) {
+                        // 従来の一枚盤面
+                        const firstMap = json.board_maps ? json.board_maps[0] : json.board_map;
+                        boardHeight = firstMap.length;
+                        heightSelect.value = boardHeight;
+                        
+                        let grids = [];
+                        if (json.board_maps && Array.isArray(json.board_maps)) {
+                            grids = json.board_maps.map(rowMap => rowMap.map(rowStr => rowStr.toLowerCase().split('').slice(0, BOARD_WIDTH)));
+                        } else if (json.board_map && Array.isArray(json.board_map)) {
+                            grids = [
+                                json.board_map.map(rowStr => rowStr.toLowerCase().split('').slice(0, BOARD_WIDTH)),
+                                Array(boardHeight).fill().map(() => Array(BOARD_WIDTH).fill('0')),
+                                Array(boardHeight).fill().map(() => Array(BOARD_WIDTH).fill('0'))
+                            ];
+                        }
+                        while (grids.length < 3) {
+                            grids.push(Array(boardHeight).fill().map(() => Array(BOARD_WIDTH).fill('0')));
+                        }
+                        branches = [
+                            {
+                                conditions: [],
+                                grids: grids
+                            }
+                        ];
+                        activeBranchIdx = 0;
+                        activeBagIdx = 0;
+                    } else {
+                        alert('Invalid format: missing "board_map" or "branches".');
+                        return;
+                    }
+
+                    renderBranchTabs();
+                    renderBagTabs();
+                    createGrid();
+                    validateGrid();
+                    alert('Import successful!');
+                } catch (e) {
+                    alert('JSON parse error: ' + e.message);
+                }
+            });
+
+            // Bagタブ選択イベント
+            if (bagTabsContainer) {
+                bagTabsContainer.addEventListener('click', (e) => {
+                    const tab = e.target.closest('.branch-tab');
+                    if (tab) {
+                        activeBagIdx = parseInt(tab.dataset.bag);
+                        renderBagTabs();
+                        createGrid();
+                        validateGrid();
+                    }
+                });
+            }
+
+            // メタデータ変更イベント
+            const metaInputs = [metaName, metaLines, metaDesc, metaSeqBonus, metaColBonus, metaWeights];
+            metaInputs.forEach(input => {
+                input.addEventListener('input', updateJSON);
+            });
+        }
+
+        // グリッドを左右反転する（J<->L, S<->Z もスワップ）
+        function mirrorCurrentGrid() {
+            // 1. 各巡目のグリッドを反転し、文字を置換
+            const newGrids = branches[activeBranchIdx].grids.map(grid => {
+                return grid.map(row => {
+                    const mirroredRow = [...row].reverse();
+                    return mirroredRow.map(cell => {
+                        switch (cell) {
+                            case 'j': return 'l';
+                            case 'l': return 'j';
+                            case 's': return 'z';
+                            case 'z': return 's';
+                            default: return cell;
+                        }
+                    });
+                });
+            });
+            branches[activeBranchIdx].grids = newGrids;
+
+            // 2. 条件（conditions）も反転
+            if (branches[activeBranchIdx].conditions) {
+                branches[activeBranchIdx].conditions = branches[activeBranchIdx].conditions.map(cond => {
+                    return mirrorConditionJS(cond);
+                });
+            }
+
+            // UIの再描画とJSON更新
+            createGrid();
+            updateJSON();
+            updateBranchCondUI();
+            validateGrid();
+        }
+
+        function mirrorConditionJS(cond) {
+            const swapPiece = (s) => {
+                const upper = s.toUpperCase();
+                if (upper === 'J') return 'L';
+                if (upper === 'L') return 'J';
+                if (upper === 'S') return 'Z';
+                if (upper === 'Z') return 'S';
+                return upper;
+            };
+
+            if (cond.includes('<')) {
+                const parts = cond.split('<').map(s => s.trim());
+                if (parts.length === 2) {
+                    return `${swapPiece(parts[0])} < ${swapPiece(parts[1])}`;
+                }
+            } else if (cond.includes('=')) {
+                const parts = cond.split('=').map(s => s.trim());
+                if (parts.length === 2) {
+                    return `${swapPiece(parts[0])} = ${swapPiece(parts[1])}`;
+                }
+            }
+            return cond;
+        }
+
+        // セルの塗りつぶし
+        function paintCell(cellElement) {
+            const r = parseInt(cellElement.dataset.row);
+            const c = parseInt(cellElement.dataset.col);
+            
+            // 状態更新
+            branches[activeBranchIdx].grids[activeBagIdx][r][c] = selectedPalette;
+            
+            // クラスのクリーンアップ
+            Object.values(typeClasses).forEach(cls => cellElement.classList.remove(cls));
+            
+            // 新クラスとテキスト適用
+            if (selectedPalette !== '0') {
+                cellElement.classList.add(typeClasses[selectedPalette]);
+                cellElement.textContent = selectedPalette;
+            } else {
+                cellElement.textContent = '';
+                // 背景に非アクティブなBagのプレビューを再描画
+                const allGrids = branches[activeBranchIdx].grids;
+                let previewChar = '0';
+                let previewBagIdx = -1;
+                for (let b = 0; b < 3; b++) {
+                    if (b !== activeBagIdx && allGrids[b][r][c] !== '0') {
+                        previewChar = allGrids[b][r][c];
+                        previewBagIdx = b;
+                        break;
+                    }
+                }
+                if (previewChar !== '0') {
+                    cellElement.classList.add(typeClasses[previewChar]);
+                    cellElement.classList.add('cell-preview');
+                    cellElement.classList.add(`preview-bag${previewBagIdx + 1}`);
+                    cellElement.textContent = previewChar;
+                }
+            }
+
+            updateJSON();
+            validateGrid();
+        }
+
+        // グリッド高さの変更
+        function adjustGridHeight(newHeight) {
+            const oldHeight = boardHeight;
+            boardHeight = newHeight;
+            
+            // すべてのブランチの全3巡目のグリッドデータをリサイズする
+            branches.forEach(b => {
+                let newGrids = [];
+                for (let bIdx = 0; bIdx < 3; bIdx++) {
+                    let newGrid = Array(newHeight).fill().map(() => Array(BOARD_WIDTH).fill('0'));
+                    const rowDiff = newHeight - oldHeight;
+                    for (let r = 0; r < newHeight; r++) {
+                        const oldRowIdx = r - rowDiff;
+                        if (oldRowIdx >= 0 && oldRowIdx < oldHeight) {
+                            newGrid[r] = [...b.grids[bIdx][oldRowIdx]];
+                        }
+                    }
+                    newGrids.push(newGrid);
+                }
+                b.grids = newGrids;
+            });
+            
+            createGrid();
+            updateJSON();
+            validateGrid();
+        }
+
+        // JSON文字列の更新
+        function updateJSON() {
+            const weights = metaWeights.value.split(',')
+                .map(w => parseFloat(w.trim()))
+                .filter(w => !isNaN(w));
+
+            const hasMultipleBranches = branches.length > 1 || (branches[0] && branches[0].conditions.length > 0);
+
+            const obj = {
+                name: metaName.value,
+                description: metaDesc.value,
+                active_until_lines: parseInt(metaLines.value) || 8,
+                sequence_match_bonus: parseFloat(metaSeqBonus.value) || 30.0,
+                opening_bonus_per_column: parseFloat(metaColBonus.value) || 5.0,
+                opening_weights: weights
+            };
+
+            const isGridEmpty = (grid) => grid.every(row => row.every(cell => cell === '0'));
+
+            // 2巡目または3巡目のグリッドが1マスでも埋まっていれば複数巡目(board_maps)としてエクスポート
+            const isMultiBag = branches.some(b => !isGridEmpty(b.grids[1]) || !isGridEmpty(b.grids[2]));
+
+            if (hasMultipleBranches) {
+                // 複数ブランチ形式でエクスポート
+                obj.branches = branches.map(b => {
+                    const item = { conditions: b.conditions };
+                    if (isMultiBag) {
+                        item.board_maps = b.grids.map(grid => grid.map(row => row.join('')));
+                    } else {
+                        item.board_map = b.grids[0].map(row => row.join(''));
+                    }
+                    return item;
+                });
+            } else {
+                // 従来の一枚盤面形式でエクスポート
+                if (isMultiBag) {
+                    obj.board_maps = branches[0].grids.map(grid => grid.map(row => row.join('')));
+                } else {
+                    obj.board_map = branches[0].grids[0].map(row => row.join(''));
+                }
+            }
+
+            jsonTextarea.value = JSON.stringify(obj, null, 2);
+        }
+
+        // バリデーション
+        function validateGrid() {
+            const activeGrid = branches[activeBranchIdx].grids[activeBagIdx];
+            
+            // BFSで連結成分を収集する
+            const visited = Array(boardHeight).fill().map(() => Array(BOARD_WIDTH).fill(false));
+            const components = [];
+            
+            for (let r = 0; r < boardHeight; r++) {
+                for (let c = 0; c < BOARD_WIDTH; c++) {
+                    const ch = activeGrid[r][c];
+                    if (ch === '0' || visited[r][c]) continue;
+                    
+                    const cells = [];
+                    const queue = [[r, c]];
+                    visited[r][c] = true;
+                    
+                    while (queue.length > 0) {
+                        const [currR, currC] = queue.shift();
+                        cells.push([currC, currR]); // (x=col, y=row)
+                        
+                        const neighbors = [
+                            [currR - 1, currC],
+                            [currR + 1, currC],
+                            [currR, currC - 1],
+                            [currR, currC + 1]
+                        ];
+                        
+                        for (const [nr, nc] of neighbors) {
+                            if (nr >= 0 && nr < boardHeight && nc >= 0 && nc < BOARD_WIDTH) {
+                                if (!visited[nr][nc] && activeGrid[nr][nc] === ch) {
+                                    visited[nr][nc] = true;
+                                    queue.push([nr, nc]);
+                                }
+                            }
+                        }
+                    }
+                    components.push({ type: ch, cells });
+                }
+            }
+
+            const errors = [];
+            const counts = { i:0, o:0, t:0, s:0, z:0, j:0, l:0 };
+            
+            components.forEach((comp, idx) => {
+                counts[comp.type]++;
+                const pieceName = comp.type.toUpperCase();
+                
+                // 4マスチェック
+                if (comp.cells.length !== 4) {
+                    errors.push(`Component #${idx+1} [${pieceName}]: Must consist of exactly 4 cells (found ${comp.cells.length} cells).`);
+                    return;
+                }
+                
+                // 形状チェック
+                const match = matchRotation(comp.type, comp.cells);
+                if (!match) {
+                    errors.push(`Component #${idx+1} [${pieceName}]: Does not match any valid rotation shape.`);
+                }
+            });
+
+            // UIの更新
+            if (errors.length === 0) {
+                validationPanel.className = 'validation-panel success';
+                const summary = Object.entries(counts)
+                    .filter(([_, count]) => count > 0)
+                    .map(([type, count]) => `${type.toUpperCase()}x${count}`)
+                    .join(', ');
+                validationPanel.innerHTML = `<strong>✔ Current Branch Layout is valid!</strong><br>Detected pieces: ${summary || 'None'}`;
+            } else {
+                validationPanel.className = 'validation-panel warning';
+                validationPanel.innerHTML = `<strong>⚠ Layout Validation Warnings:</strong><ul>` + 
+                    errors.map(err => `<li>${err}</li>`).join('') + `</ul>`;
+            }
+        }
+
+        // ミノ形状のマッチ
+        function matchRotation(type, cells) {
+            const minX = Math.min(...cells.map(c => c[0]));
+            const minY = Math.min(...cells.map(c => c[1]));
+            
+            // 相対座標化
+            const relSet = new Set(cells.map(([x, y]) => `${x - minX},${y - minY}`));
+            
+            const shapes = PIECE_SHAPES[type];
+            if (!shapes) return null;
+            
+            for (let rot = 0; rot < shapes.length; rot++) {
+                const shape = shapes[rot];
+                const shapeMinX = Math.min(...shape.map(c => c[0]));
+                const shapeMinY = Math.min(...shape.map(c => c[1]));
+                const normSet = new Set(shape.map(([dx, dy]) => `${dx - shapeMinX},${dy - shapeMinY}`));
+                
+                // 一致比較
+                if (relSet.size === normSet.size && [...relSet].every(item => normSet.has(item))) {
+                    return { col: minX - shapeMinX, rotation: rot };
+                }
+            }
+            return null;
+        }
+
+        // 実行
+        init();
+    </script>
+</body>
+</html>

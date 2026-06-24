@@ -1,0 +1,16 @@
+{
+  "name": "63積み",
+  "description": "7列目（インデックス6）を谷にして、左6列と右3列を均等に積む。Iピースを7列目に投入して4ライン消し（テトリス）を狙う基本戦術。",
+
+  "board_map": [
+    "s000ti0000",
+    "ss0tti0oo0",
+    "jszzti0ool",
+    "jjjzzi0lll"
+  ],
+
+  "active_until_lines": 8,
+  "sequence_match_bonus": 30.0,
+  "opening_bonus_per_column": 5.0,
+  "opening_weights": [-2.0, -0.5, -0.8, -7.5, -2.0, 0.5, 0.0, 100.0]
+}

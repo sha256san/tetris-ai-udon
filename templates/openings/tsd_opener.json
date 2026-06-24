@@ -1,0 +1,16 @@
+{
+  "name": "TSD オープナー",
+  "description": "Tスピンダブル（TSD）を狙うオープニング。右側に段差を作り、Tミノが回転できるスロットを形成する。",
+
+  "board_map": [
+    "00s00z0t00",
+    "oosszzttl0",
+    "oo0szj0tl0",
+    "iiii0jjjll"
+  ],
+
+  "active_until_lines": 6,
+  "sequence_match_bonus": 25.0,
+  "opening_bonus_per_column": 4.0,
+  "opening_weights": [-1.5, -0.5, -1.0, -7.0, -2.0, -0.3, 0.0, 30.0]
+}

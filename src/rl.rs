@@ -1,4 +1,4 @@
-use crate::tetris::{Game, BlockType};
+use crate::tetris::{Game, BlockType, get_well_bonus};
 use crate::ai::{AiModel, enumerate_all_moves, CandidateMove};
 use rand::Rng;
 
@@ -20,7 +20,7 @@ pub fn run_rl_episode(
         turns += 1;
 
         // 候補手を列挙
-        let candidates = enumerate_all_moves(&game, model);
+        let candidates = enumerate_all_moves(&game, model, None, 0);
         if candidates.is_empty() {
             // 置ける場所がない場合はゲームオーバーにする
             game.game_over = true;
@@ -62,23 +62,26 @@ pub fn run_rl_episode(
         let lines_cleared_this_turn = game.lines_cleared - prev_lines;
 
         // 報酬の設計
-        let mut reward = 1.0; // 生き残り報酬
+        let mut reward = crate::config::rl::SURVIVAL_REWARD;
 
         // Iミノをホールドへ保管した場合にボーナス（4ライン消し準備の促進）
         if held_i_piece {
-            reward += 5.0;
+            reward += crate::config::rl::HOLD_I_BONUS;
         }
 
-        reward += match lines_cleared_this_turn {
-            1 => 1.0,
-            2 => 3.0,
-            3 => 5.0,
-            4 => 80.0, // テトリス消去に莫大な報酬
-            _ => 0.0,
-        };
+        if (lines_cleared_this_turn as usize) < crate::config::rl::LINE_CLEAR_REWARDS.len() {
+            reward += crate::config::rl::LINE_CLEAR_REWARDS[lines_cleared_this_turn as usize];
+        }
+
+        // 縦3マス以上の深い穴が1列しかない場合の報酬を追加
+        let well_bonus_score = get_well_bonus(&game.board);
+        if well_bonus_score > 0 {
+            let rl_bonus = (well_bonus_score as f32) * crate::config::rl::WELL_BONUS_MULTIPLIER;
+            reward += rl_bonus;
+        }
 
         if game.game_over {
-            reward -= 500.0; // ゲームオーバーペナルティ
+            reward += crate::config::rl::GAME_OVER_PENALTY;
         }
         total_reward += reward;
 
@@ -86,7 +89,7 @@ pub fn run_rl_episode(
         let v_s_prime = if game.game_over {
             0.0 // 終端状態の価値は0
         } else {
-            let next_candidates = enumerate_all_moves(&game, model);
+            let next_candidates = enumerate_all_moves(&game, model, None, 0);
             if next_candidates.is_empty() {
                 0.0
             } else {

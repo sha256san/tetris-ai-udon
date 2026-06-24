@@ -1,0 +1,17 @@
+{
+  "name": "C4W 中開けREN",
+  "description": "中央4列（インデックス3〜6）を空けてREN（連続ライン消去）を稼ぐ戦術。左右を積み上げ、中央にピースを落とし続ける。",
+
+  "board_map": [
+    "0jj0000ll0",
+    "ij000000li",
+    "ij000000li",
+    "ioo0000ooi",
+    "ioo0000ooi"
+  ],
+
+  "active_until_lines": 12,
+  "sequence_match_bonus": 25.0,
+  "opening_bonus_per_column": 4.0,
+  "opening_weights": [-2.5, -1.0, -0.5, -6.0, -1.5, -0.1, 2.0, 20.0]
+}

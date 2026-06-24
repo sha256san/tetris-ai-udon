@@ -57,8 +57,13 @@ pub fn draw_game(
     model: &AiModel,
     mode_name: &str,
     rl_stats: Option<(usize, f32, f32)>, // (episodes, avg_lines, epsilon)
+    opening: Option<&crate::opening::OpeningTemplate>,
+    opening_turn: usize,
 ) -> std::io::Result<()> {
     let mut out = stdout();
+
+    // 未来のネクストピースのシミュレーション計算
+    let future_pieces = crate::ai::simulate_future_moves(game, model, opening, opening_turn);
 
     // 1. タイトルとモード表示
     queue!(
@@ -79,7 +84,7 @@ pub fn draw_game(
     draw_ai_weights(&mut out, model)?;
 
     // 4. 中央：テトリス盤面の描画
-    draw_board(&mut out, game)?;
+    draw_board(&mut out, game, &future_pieces)?;
 
     // 5. 右側：NEXT枠の描画
     draw_next_box(&mut out, game)?;
@@ -106,7 +111,7 @@ pub fn draw_game(
     Ok(())
 }
 
-fn draw_board(out: &mut Stdout, game: &Game) -> std::io::Result<()> {
+fn draw_board(out: &mut Stdout, game: &Game, future_pieces: &[(Piece, BlockType)]) -> std::io::Result<()> {
     let border_color = Color::Rgb { r: 100, g: 100, b: 120 };
     
     // 上枠
@@ -125,6 +130,14 @@ fn draw_board(out: &mut Stdout, game: &Game) -> std::io::Result<()> {
     let offsets = crate::tetris::get_piece_offsets(game.current_piece.block_type, game.current_piece.rotation);
     for i in 0..4 {
         ghost_cells[i] = (game.current_piece.x + offsets[i].0, ghost_y + offsets[i].1);
+    }
+
+    // 未来のピースのセル座標とミノタイプを収集
+    let mut future_cells = Vec::new();
+    for (piece, bt) in future_pieces {
+        for &(cx, cy) in &piece.get_cells() {
+            future_cells.push((cx, cy, *bt));
+        }
     }
 
     // 盤面ブロック (INTERNAL_HEIGHTの上部バッファをカットし、下部BOARD_HEIGHT=20行のみ描画)
@@ -159,6 +172,16 @@ fn draw_board(out: &mut Stdout, game: &Game) -> std::io::Result<()> {
                     out,
                     SetForegroundColor(Color::DarkGrey),
                     Print("░░"),
+                    ResetColor
+                )?;
+            } else if !game.game_over && future_cells.iter().any(|&(fcx, fcy, _)| fcx == cx && fcy == cy) {
+                // 未来の予測配置ブロック（真ん中黒、縁取りがミノ色）
+                let (_, _, bt) = future_cells.iter().find(|&&(fcx, fcy, _)| fcx == cx && fcy == cy).unwrap();
+                queue!(
+                    out,
+                    SetForegroundColor(get_block_color(*bt)),
+                    SetBackgroundColor(Color::Black),
+                    Print("[]"),
                     ResetColor
                 )?;
             } else {
@@ -235,14 +258,14 @@ fn draw_next_box(out: &mut Stdout, game: &Game) -> std::io::Result<()> {
     let y_pos = UI_Y_OFFSET;
     let border_color = Color::Rgb { r: 100, g: 100, b: 120 };
 
-    // Nextを3つ描画
+    // Nextを5つ描画（ボックスの高さを16行に拡張）
     queue!(out, cursor::MoveTo(x_pos, y_pos), SetForegroundColor(border_color), Print("┌──NEXT──┐"), ResetColor)?;
-    for i in 1..10 {
+    for i in 1..16 {
         queue!(out, cursor::MoveTo(x_pos, y_pos + i), SetForegroundColor(border_color), Print("│        │"), ResetColor)?;
     }
-    queue!(out, cursor::MoveTo(x_pos, y_pos + 10), SetForegroundColor(border_color), Print("└────────┘"), ResetColor)?;
+    queue!(out, cursor::MoveTo(x_pos, y_pos + 16), SetForegroundColor(border_color), Print("└────────┘"), ResetColor)?;
 
-    let next_pieces = game.bag.peek_next(3);
+    let next_pieces = game.bag.peek_next(5);
     for (idx, &bt) in next_pieces.iter().enumerate() {
         let offsets = crate::tetris::get_piece_offsets(bt, 0);
         let color = get_block_color(bt);

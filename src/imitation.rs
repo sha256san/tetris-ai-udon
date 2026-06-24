@@ -65,7 +65,7 @@ pub fn train_one_epoch(
         game.bag.queue = bag_queue;
 
         // すべての候補手を列挙（AIモデルで評価値算出済み）
-        let candidates = enumerate_all_moves(&game, model);
+        let candidates = enumerate_all_moves(&game, model, None, 0);
         if candidates.is_empty() {
             continue;
         }

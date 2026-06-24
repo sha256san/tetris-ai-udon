@@ -1,4 +1,4 @@
-use crate::tetris::{Game, Piece, Board, BlockType, BOARD_WIDTH, INTERNAL_HEIGHT};
+use crate::tetris::{Game, Piece, Board, BlockType, BOARD_WIDTH, INTERNAL_HEIGHT, get_well_bonus};
 use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -8,19 +8,8 @@ pub struct AiModel {
 
 impl AiModel {
     pub fn new_default() -> Self {
-        // 合計8つの特徴量に対するデフォルト重み
-        // [max_height, avg_height, bumpiness, holes, blocks_above_holes, wells, cleared_1_3, cleared_4]
         AiModel {
-            weights: vec![
-                -4.00, // max_height: 高さ8超のときペナルティ
-                -1.50, // avg_height: 高さ8超のときペナルティ
-                -1.00, // bumpiness: 平らさの優先度を下げる（火力を出しやすくする）
-                -7.50, // holes: 穴は極力避ける
-                -2.00, // blocks_above_holes: 穴の上のブロックも避ける
-                -0.50, // wells: 深い谷の減点を減らす
-                0.01,  // cleared_1_3: 1〜3ライン消去（低評価にして4ライン消しを待たせる）
-                400.00, // cleared_4: 4ライン消去（テトリス、極めて高い評価）
-            ],
+            weights: crate::config::heuristic::DEFAULT_WEIGHTS.to_vec(),
         }
     }
 
@@ -124,11 +113,17 @@ pub fn extract_features(board: &Board, cleared_lines: usize) -> Vec<f32> {
 }
 
 // すべての可能な配置（候補手）を列挙する
-pub fn enumerate_all_moves(game: &Game, model: &AiModel) -> Vec<CandidateMove> {
+// opening_turn: オープニングシーケンスの何手目か（0-indexed）
+pub fn enumerate_all_moves(
+    game: &Game,
+    model: &AiModel,
+    opening: Option<&crate::opening::OpeningTemplate>,
+    opening_turn: usize,
+) -> Vec<CandidateMove> {
     let mut moves = Vec::new();
 
     // 1. ホールドを使わない場合
-    enumerate_moves_for_piece(game, game.current_piece.block_type, false, model, &mut moves);
+    enumerate_moves_for_piece(game, game.current_piece.block_type, false, model, opening, opening_turn, &mut moves);
 
     // 2. ホールドを使う場合
     if !game.hold_locked {
@@ -139,7 +134,7 @@ pub fn enumerate_all_moves(game: &Game, model: &AiModel) -> Vec<CandidateMove> {
                 game.bag.peek_next(1)[0]
             }
         };
-        enumerate_moves_for_piece(game, next_piece_type, true, model, &mut moves);
+        enumerate_moves_for_piece(game, next_piece_type, true, model, opening, opening_turn, &mut moves);
     }
 
     // 評価スコアの高い順にソート
@@ -153,6 +148,8 @@ fn enumerate_moves_for_piece(
     block_type: BlockType,
     use_hold: bool,
     model: &AiModel,
+    opening: Option<&crate::opening::OpeningTemplate>,
+    opening_turn: usize,
     moves: &mut Vec<CandidateMove>,
 ) {
     let spawn_x = match block_type {
@@ -228,16 +225,58 @@ fn enumerate_moves_for_piece(
             if cells_locked_count == 4 {
                 // ライン消去数をシミュレート
                 let (temp_board_after_clear, cleared) = simulate_line_clears(&temp_board);
-                
+
+                // オープニングフェーズが有効かチェック
+                let is_opening_active = opening
+                    .map_or(false, |o| game.lines_cleared < o.active_until_lines);
+
                 // 特徴量抽出
                 let features = extract_features(&temp_board_after_clear, cleared);
-                let mut eval_score = model.evaluate(&features);
 
-                // Iミノをホールドに入れる行動（現在Iミノを手放してホールドする）に加点
-                // ホールド操作かつ、「ホールドに入るのがIミノ」= 現在の手がcurrent_pieceをIミノとしてホールドした場合
+                // オープニング中は opening_weights を使用、それ以外は model.weights
+                let mut eval_score = if is_opening_active {
+                    let o = opening.unwrap();
+                    let mut s = 0.0f32;
+                    for i in 0..o.opening_weights.len().min(features.len()) {
+                        s += o.opening_weights[i] * features[i];
+                    }
+                    s
+                } else {
+                    model.evaluate(&features)
+                };
+
+                // オープニング適合ボーナス（目標盤面への近さ）
+                if is_opening_active {
+                    // 1) 列高さ目標への近さボーナス
+                    eval_score += crate::opening::evaluate_opening_fit(
+                        &temp_board_after_clear,
+                        opening.unwrap(),
+                        game,
+                        opening_turn,
+                    );
+                    // 2) シーケンス配置一致ボーナス
+                    eval_score += crate::opening::evaluate_sequence_match(
+                        opening.unwrap(),
+                        game,
+                        opening_turn,
+                        block_type,
+                        target_x,
+                        rotation,
+                    );
+                }
+
+                // 縦3マス以上の深い穴が1列しかない場合のボーナス（通常フェーズのみ）
+                if !is_opening_active {
+                    let well_bonus_score = get_well_bonus(&temp_board_after_clear);
+                    if well_bonus_score > 0 {
+                        let ai_bonus = (well_bonus_score as f32) * crate::config::heuristic::WELL_BONUS_MULTIPLIER;
+                        eval_score += ai_bonus;
+                    }
+                }
+
+                // Iミノをホールドに入れる行動に加点
                 if use_hold && game.current_piece.block_type == BlockType::I && game.hold_piece != Some(BlockType::I) {
-                    // Iミノをホールドに「保管」する行動：4ライン消し準備ボーナス
-                    eval_score += 8.0;
+                    eval_score += crate::config::heuristic::HOLD_I_BONUS;
                 }
 
                 moves.push(CandidateMove {
@@ -278,4 +317,64 @@ fn simulate_line_clears(board: &Board) -> (Board, usize) {
         }
     }
     (new_board, cleared)
+}
+
+/// AIのロジックに基づいて、現在のピース及びNextキュー内のすべてのピースの将来の配置位置をシミュレートする
+pub fn simulate_future_moves(
+    game: &Game,
+    model: &AiModel,
+    opening: Option<&crate::opening::OpeningTemplate>,
+    opening_turn: usize,
+) -> Vec<(Piece, BlockType)> {
+    let mut temp_game = game.clone();
+    let mut results = Vec::new();
+    let mut curr_turn = opening_turn;
+
+    // Nextキューの長さ（通常5個）
+    let num_nexts = game.bag.peek_next(5).len();
+
+    // 現在の手も含めて、Nextにあるピースの数だけ先をシミュレート
+    for _ in 0..=num_nexts {
+        if temp_game.game_over {
+            break;
+        }
+
+        let candidates = enumerate_all_moves(&temp_game, model, opening, curr_turn);
+        if candidates.is_empty() {
+            break;
+        }
+
+        let best_move = &candidates[0];
+
+        // 予測された配置ピースを記録
+        let placed_piece = best_move.final_piece.clone();
+        let bt = placed_piece.block_type;
+        results.push((placed_piece, bt));
+
+        // 仮想ゲーム状態の更新
+        if best_move.use_hold {
+            temp_game.hold();
+        }
+        
+        // ピースを決定された位置に設定
+        temp_game.current_piece.x = best_move.final_piece.x;
+        temp_game.current_piece.rotation = best_move.final_piece.rotation;
+        
+        // 固定して次のピースへ進める
+        temp_game.hard_drop();
+
+        // オープニングターンカウンタの更新
+        if let Some(op) = opening {
+            let max_turns = if let Some(branch) = op.get_active_branch(&temp_game) {
+                branch.parsed_placements.len()
+            } else {
+                op.parsed_placements.len()
+            };
+            if temp_game.lines_cleared < op.active_until_lines && curr_turn < max_turns {
+                curr_turn += 1;
+            }
+        }
+    }
+
+    results
 }

@@ -304,13 +304,12 @@ impl Game {
         // ライン消去
         let cleared = self.clear_lines();
         self.lines_cleared += cleared as u32;
-        self.score += match cleared {
-            1 => 100,
-            2 => 300,
-            3 => 500,
-            4 => 800,
-            _ => 0,
-        };
+        if cleared < crate::config::game::LINE_CLEAR_SCORES.len() {
+            self.score += crate::config::game::LINE_CLEAR_SCORES[cleared];
+        }
+
+        // 深い穴ボーナス
+        self.score += get_well_bonus(&self.board);
 
         // 次のミノをスポーン
         let next_type = self.bag.pop();
@@ -352,6 +351,75 @@ impl Game {
     }
 }
 
+// 縦3マス以上の深い穴が1列しかない場合のボーナススコアを計算
+pub fn get_well_bonus(board: &Board) -> u32 {
+    let mut heights = [0; BOARD_WIDTH];
+    for x in 0..BOARD_WIDTH {
+        let mut height = 0;
+        for y in 0..INTERNAL_HEIGHT {
+            if board[y][x].is_some() {
+                height = INTERNAL_HEIGHT - y;
+                break;
+            }
+        }
+        heights[x] = height as i32;
+    }
+
+    let mut well_columns = Vec::new();
+    for x in 0..BOARD_WIDTH {
+        let left = if x == 0 { INTERNAL_HEIGHT as i32 } else { heights[x - 1] };
+        let right = if x == BOARD_WIDTH - 1 { INTERNAL_HEIGHT as i32 } else { heights[x + 1] };
+        let h = heights[x];
+        let diff = std::cmp::min(left, right) - h;
+        if diff >= 3 {
+            well_columns.push((x, diff));
+        }
+    }
+
+    if well_columns.len() == 1 {
+        let well_x = well_columns[0].0;
+
+        // ほかの列に穴（ブロックの下の空きマス）がないかチェック
+        for x in 0..BOARD_WIDTH {
+            if x != well_x {
+                let mut block_found = false;
+                for y in 0..INTERNAL_HEIGHT {
+                    if board[y][x].is_some() {
+                        block_found = true;
+                    } else if block_found {
+                        // ブロックがあるにもかかわらず空きマスがある＝穴
+                        return 0;
+                    }
+                }
+            }
+        }
+
+        let depth = well_columns[0].1;
+
+        // 得点の基本スコアを列（well_x）に応じて算出
+        // - 7列目 (インデックス 6) は一番高い
+        // - 2列目〜9列目 (インデックス 1〜8) は少し高い
+        // - 1列目, 10列目 (インデックス 0, 9) はベース
+        let base_score = if well_x == 6 {
+            crate::config::game::WELL_BASE_SCORE_TARGET
+        } else if well_x >= 1 && well_x <= 8 {
+            crate::config::game::WELL_BASE_SCORE_MIDDLE
+        } else {
+            crate::config::game::WELL_BASE_SCORE_EDGE
+        };
+
+        if depth == 3 {
+            base_score
+        } else if depth >= 4 {
+            base_score * 3
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,5 +455,58 @@ mod tests {
         let success = game.try_rotate(RotationDirection::CounterClockwise);
         assert!(success);
         assert!(game.current_piece.x >= 0);
+    }
+
+    #[test]
+    fn test_well_bonus() {
+        use crate::config::game::{WELL_BASE_SCORE_EDGE, WELL_BASE_SCORE_MIDDLE, WELL_BASE_SCORE_TARGET};
+
+        // --- 1. 1列目 (index 0) の穴 ---
+        let mut board = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
+        for y in (INTERNAL_HEIGHT - 3)..INTERNAL_HEIGHT {
+            board[y][1] = Some(BlockType::O);
+        }
+        // index 0 はエッジスコア (WELL_BASE_SCORE_EDGE)
+        assert_eq!(get_well_bonus(&board), WELL_BASE_SCORE_EDGE);
+
+        // 深さ4なら3倍
+        board[INTERNAL_HEIGHT - 4][1] = Some(BlockType::O);
+        assert_eq!(get_well_bonus(&board), WELL_BASE_SCORE_EDGE * 3);
+
+        // ほかの列に穴をあけると0
+        board[INTERNAL_HEIGHT - 2][1] = None;
+        assert_eq!(get_well_bonus(&board), 0);
+        // 元に戻す
+        board[INTERNAL_HEIGHT - 2][1] = Some(BlockType::O);
+        assert_eq!(get_well_bonus(&board), WELL_BASE_SCORE_EDGE * 3);
+
+        // 2列以上に穴があれば0
+        for y in (INTERNAL_HEIGHT - 3)..INTERNAL_HEIGHT {
+            board[y][8] = Some(BlockType::O);
+        }
+        assert_eq!(get_well_bonus(&board), 0);
+
+        // --- 2. 2列目 (index 1) の穴 ---
+        let mut board2 = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
+        for y in (INTERNAL_HEIGHT - 3)..INTERNAL_HEIGHT {
+            board2[y][0] = Some(BlockType::O);
+            board2[y][2] = Some(BlockType::O);
+        }
+        // index 1 はミドルスコア (WELL_BASE_SCORE_MIDDLE)
+        assert_eq!(get_well_bonus(&board2), WELL_BASE_SCORE_MIDDLE);
+
+        // --- 3. 7列目 (index 6) の穴 ---
+        let mut board3 = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
+        for y in (INTERNAL_HEIGHT - 3)..INTERNAL_HEIGHT {
+            board3[y][5] = Some(BlockType::O);
+            board3[y][7] = Some(BlockType::O);
+        }
+        // index 6 はターゲットスコア (WELL_BASE_SCORE_TARGET)
+        assert_eq!(get_well_bonus(&board3), WELL_BASE_SCORE_TARGET);
+
+        // 深さ4なら3倍
+        board3[INTERNAL_HEIGHT - 4][5] = Some(BlockType::O);
+        board3[INTERNAL_HEIGHT - 4][7] = Some(BlockType::O);
+        assert_eq!(get_well_bonus(&board3), WELL_BASE_SCORE_TARGET * 3);
     }
 }
