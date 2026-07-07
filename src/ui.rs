@@ -55,15 +55,11 @@ pub fn get_ghost_y(game: &Game) -> i32 {
 pub fn draw_game(
     game: &Game,
     model: &AiModel,
+    future_pieces: &[(Piece, BlockType)],
     mode_name: &str,
     rl_stats: Option<(usize, f32, f32)>, // (episodes, avg_lines, epsilon)
-    opening: Option<&crate::opening::OpeningTemplate>,
-    opening_turn: usize,
 ) -> std::io::Result<()> {
     let mut out = stdout();
-
-    // 未来のネクストピースのシミュレーション計算
-    let future_pieces = crate::ai::simulate_future_moves(game, model, opening, opening_turn);
 
     // 1. タイトルとモード表示
     queue!(
@@ -103,6 +99,24 @@ pub fn draw_game(
             Print(format!("Avg Lines: {:.2}", avg_lines)),
             cursor::MoveTo(UI_X_OFFSET + 26, UI_Y_OFFSET + 15),
             Print(format!("Epsilon: {:.4}", eps)),
+            ResetColor
+        )?;
+    }
+
+    // 7. T-spin テキストの描画 (ボードの真下)
+    if let Some(ref t_spin_name) = game.last_t_spin {
+        queue!(
+            out,
+            cursor::MoveTo(UI_X_OFFSET, UI_Y_OFFSET + 22),
+            SetForegroundColor(Color::Rgb { r: 255, g: 215, b: 0 }), // ゴールド
+            Print(format!("★ {}! ★", t_spin_name.to_uppercase())),
+            ResetColor
+        )?;
+    } else {
+        queue!(
+            out,
+            cursor::MoveTo(UI_X_OFFSET, UI_Y_OFFSET + 22),
+            Print("                     "),
             ResetColor
         )?;
     }
@@ -316,9 +330,11 @@ fn draw_ai_weights(out: &mut Stdout, model: &AiModel) -> std::io::Result<()> {
         "Wells",
         "Clr13",
         "Tetrs",
+        "TSlot",
     ];
 
-    for i in 0..8 {
+    let n = model.weights.len().min(9);
+    for i in 0..n {
         queue!(
             out,
             cursor::MoveTo(x_pos, y_pos + 1 + i as u16),
@@ -334,7 +350,7 @@ fn draw_ai_weights(out: &mut Stdout, model: &AiModel) -> std::io::Result<()> {
 
     queue!(
         out,
-        cursor::MoveTo(x_pos, y_pos + 9),
+        cursor::MoveTo(x_pos, y_pos + 1 + n as u16),
         SetForegroundColor(border_color),
         Print("└──────────────┘"),
         ResetColor

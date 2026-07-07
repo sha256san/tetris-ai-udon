@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tetris AI Battle Arena</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --glass-bg: rgba(30, 41, 59, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --text-color: #f8fafc;
+            --accent-color: #38bdf8;
+            --danger-color: #ef4444;
+            --success-color: #10b981;
+            --btb-color: #fbbf24;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(56, 189, 248, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 85% 30%, rgba(239, 68, 68, 0.1) 0%, transparent 50%);
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+            z-index: 10;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            background: linear-gradient(to right, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .arena {
+            display: flex;
+            gap: 4rem;
+            z-index: 10;
+        }
+
+        .player-panel {
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+            position: relative;
+            transition: transform 0.2s;
+        }
+
+        .player-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .player-stats {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            margin-bottom: 1rem;
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .stat-badge {
+            background: rgba(0,0,0,0.5);
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            border: 1px solid var(--glass-border);
+        }
+
+        .garbage-warning {
+            color: var(--danger-color);
+            font-weight: bold;
+            animation: pulse 1s infinite;
+        }
+
+        .btb-badge {
+            color: var(--btb-color);
+            font-weight: bold;
+            text-shadow: 0 0 10px rgba(251, 191, 36, 0.5);
+        }
+
+        .board-container {
+            display: flex;
+            gap: 1rem;
+        }
+
+        .side-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            width: 80px;
+        }
+
+        .piece-box {
+            background: rgba(0,0,0,0.6);
+            border: 1px solid var(--glass-border);
+            border-radius: 8px;
+            padding: 0.5rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 80px;
+        }
+
+        .piece-box span {
+            font-size: 0.7rem;
+            color: #94a3b8;
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(10, 24px);
+            grid-template-rows: repeat(20, 24px);
+            gap: 1px;
+            background-color: rgba(255,255,255,0.05);
+            border: 2px solid rgba(255,255,255,0.2);
+            border-radius: 4px;
+            padding: 2px;
+        }
+
+        .cell {
+            width: 24px;
+            height: 24px;
+            border-radius: 2px;
+            background-color: rgba(0, 0, 0, 0.4);
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05);
+        }
+
+        .cell.filled {
+            box-shadow: inset 0 0 0 1px rgba(0,0,0,0.2), inset 0 2px 0 rgba(255,255,255,0.2);
+        }
+        
+        .cell.ghost {
+            opacity: 0.3;
+        }
+
+        /* Colors for pieces */
+        .color-I { background-color: #0ea5e9; }
+        .color-O { background-color: #facc15; }
+        .color-T { background-color: #a855f7; }
+        .color-S { background-color: #22c55e; }
+        .color-Z { background-color: #ef4444; }
+        .color-J { background-color: #3b82f6; }
+        .color-L { background-color: #f97316; }
+
+        .mini-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 12px);
+            grid-template-rows: repeat(4, 12px);
+            gap: 1px;
+        }
+        .mini-cell {
+            width: 12px;
+            height: 12px;
+            border-radius: 1px;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.8; transform: scale(1.05); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Tetris AI Battle Arena</h1>
+    </div>
+
+    <div class="arena">
+        <!-- Player 1 -->
+        <div class="player-panel" id="p1-panel">
+            <div class="player-title" style="color: var(--accent-color)">Player 1 (Blue)</div>
+            <div class="player-stats">
+                <div class="stat-badge">Wins: <span id="p1-wins">0</span></div>
+                <div class="stat-badge">Score: <span id="p1-score">0</span></div>
+            </div>
+            <div class="player-stats">
+                <div class="stat-badge" id="p1-btb">No BtB</div>
+                <div class="stat-badge">Garbage: <span id="p1-garbage" class="garbage-warning">0</span></div>
+            </div>
+            <div class="board-container">
+                <div class="side-panel">
+                    <div class="piece-box">
+                        <span>Hold</span>
+                        <div class="mini-grid" id="p1-hold"></div>
+                    </div>
+                </div>
+                <div class="grid" id="p1-board"></div>
+                <div class="side-panel">
+                    <div class="piece-box">
+                        <span>Next</span>
+                        <div class="mini-grid" id="p1-next1"></div>
+                    </div>
+                    <div class="piece-box">
+                        <div class="mini-grid" id="p1-next2"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Player 2 -->
+        <div class="player-panel" id="p2-panel">
+            <div class="player-title" style="color: var(--danger-color)">Player 2 (Red)</div>
+            <div class="player-stats">
+                <div class="stat-badge">Wins: <span id="p2-wins">0</span></div>
+                <div class="stat-badge">Score: <span id="p2-score">0</span></div>
+            </div>
+            <div class="player-stats">
+                <div class="stat-badge" id="p2-btb">No BtB</div>
+                <div class="stat-badge">Garbage: <span id="p2-garbage" class="garbage-warning">0</span></div>
+            </div>
+            <div class="board-container">
+                <div class="side-panel">
+                    <div class="piece-box">
+                        <span>Hold</span>
+                        <div class="mini-grid" id="p2-hold"></div>
+                    </div>
+                </div>
+                <div class="grid" id="p2-board"></div>
+                <div class="side-panel">
+                    <div class="piece-box">
+                        <span>Next</span>
+                        <div class="mini-grid" id="p2-next1"></div>
+                    </div>
+                    <div class="piece-box">
+                        <div class="mini-grid" id="p2-next2"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const shapes = {
+            'I': [[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],
+            'O': [[0,0,0,0],[0,1,1,0],[0,1,1,0],[0,0,0,0]],
+            'T': [[0,0,0,0],[0,1,0,0],[1,1,1,0],[0,0,0,0]],
+            'S': [[0,0,0,0],[0,1,1,0],[1,1,0,0],[0,0,0,0]],
+            'Z': [[0,0,0,0],[1,1,0,0],[0,1,1,0],[0,0,0,0]],
+            'J': [[0,0,0,0],[1,0,0,0],[1,1,1,0],[0,0,0,0]],
+            'L': [[0,0,0,0],[0,0,1,0],[1,1,1,0],[0,0,0,0]]
+        };
+
+        function createGrid(containerId, isMini = false) {
+            const container = document.getElementById(containerId);
+            container.innerHTML = '';
+            const rows = isMini ? 4 : 20;
+            const cols = isMini ? 4 : 10;
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    const cell = document.createElement('div');
+                    cell.className = isMini ? 'mini-cell' : 'cell';
+                    cell.id = `${containerId}-${r}-${c}`;
+                    container.appendChild(cell);
+                }
+            }
+        }
+
+        function drawMiniPiece(containerId, pieceType) {
+            for (let r = 0; r < 4; r++) {
+                for (let c = 0; c < 4; c++) {
+                    const cell = document.getElementById(`${containerId}-${r}-${c}`);
+                    cell.className = 'mini-cell';
+                    if (pieceType && shapes[pieceType][r][c]) {
+                        cell.classList.add(`color-${pieceType}`, 'filled');
+                    } else {
+                        cell.style.backgroundColor = 'transparent';
+                    }
+                }
+            }
+        }
+
+        function getPieceOffsets(blockType, rotation) {
+            const r = rotation % 4;
+            switch(blockType) {
+                case 'I':
+                    if (r===0) return [[-1,0],[0,0],[1,0],[2,0]];
+                    if (r===1) return [[1,-1],[1,0],[1,1],[1,2]];
+                    if (r===2) return [[-1,1],[0,1],[1,1],[2,1]];
+                    if (r===3) return [[0,-1],[0,0],[0,1],[0,2]];
+                    break;
+                case 'O': return [[0,0],[1,0],[0,1],[1,1]];
+                case 'T':
+                    if (r===0) return [[0,-1],[-1,0],[0,0],[1,0]];
+                    if (r===1) return [[0,-1],[0,0],[1,0],[0,1]];
+                    if (r===2) return [[-1,0],[0,0],[1,0],[0,1]];
+                    if (r===3) return [[0,-1],[-1,0],[0,0],[0,1]];
+                    break;
+                case 'S':
+                    if (r===0) return [[0,-1],[1,-1],[-1,0],[0,0]];
+                    if (r===1) return [[0,-1],[0,0],[1,0],[1,1]];
+                    if (r===2) return [[0,0],[1,0],[-1,1],[0,1]];
+                    if (r===3) return [[-1,-1],[-1,0],[0,0],[0,1]];
+                    break;
+                case 'Z':
+                    if (r===0) return [[-1,-1],[0,-1],[0,0],[1,0]];
+                    if (r===1) return [[1,-1],[0,0],[1,0],[0,1]];
+                    if (r===2) return [[-1,0],[0,0],[0,1],[1,1]];
+                    if (r===3) return [[0,-1],[-1,0],[0,0],[-1,1]];
+                    break;
+                case 'J':
+                    if (r===0) return [[-1,-1],[-1,0],[0,0],[1,0]];
+                    if (r===1) return [[0,-1],[1,-1],[0,0],[0,1]];
+                    if (r===2) return [[-1,0],[0,0],[1,0],[1,1]];
+                    if (r===3) return [[0,-1],[0,0],[-1,1],[0,1]];
+                    break;
+                case 'L':
+                    if (r===0) return [[1,-1],[-1,0],[0,0],[1,0]];
+                    if (r===1) return [[0,-1],[0,0],[0,1],[1,1]];
+                    if (r===2) return [[-1,0],[0,0],[1,0],[-1,1]];
+                    if (r===3) return [[-1,-1],[0,-1],[0,0],[0,1]];
+                    break;
+            }
+            return [[0,0],[0,0],[0,0],[0,0]];
+        }
+
+        function updatePlayer(pNum, game, wins) {
+            document.getElementById(`p${pNum}-wins`).innerText = wins;
+            document.getElementById(`p${pNum}-score`).innerText = game.score;
+            document.getElementById(`p${pNum}-garbage`).innerText = game.pending_garbage;
+            
+            const btbEl = document.getElementById(`p${pNum}-btb`);
+            if (game.btb) {
+                btbEl.innerText = "🔥 BtB Active 🔥";
+                btbEl.className = "stat-badge btb-badge";
+            } else {
+                btbEl.innerText = "No BtB";
+                btbEl.className = "stat-badge";
+            }
+
+            // Draw hold & next
+            drawMiniPiece(`p${pNum}-hold`, game.hold_piece);
+            drawMiniPiece(`p${pNum}-next1`, game.bag.queue[0]);
+            drawMiniPiece(`p${pNum}-next2`, game.bag.queue[1]);
+
+            // Draw board
+            for (let r = 0; r < 20; r++) {
+                for (let c = 0; c < 10; c++) {
+                    const cell = document.getElementById(`p${pNum}-board-${r}-${c}`);
+                    cell.className = 'cell';
+                    // board starts at y=4 for visible area (INTERNAL_HEIGHT=24)
+                    const val = game.board[r + 4][c];
+                    if (val) {
+                        cell.classList.add(`color-${val}`, 'filled');
+                    }
+                }
+            }
+
+            // Draw active piece
+            const activePiece = game.current_piece;
+            if (activePiece) {
+                const offsets = getPieceOffsets(activePiece.block_type, activePiece.rotation);
+                for (let i = 0; i < 4; i++) {
+                    const cx = activePiece.x + offsets[i][0];
+                    const cy = activePiece.y + offsets[i][1] - 4;
+                    if (cx >= 0 && cx < 10 && cy >= 0 && cy < 20) {
+                        const cell = document.getElementById(`p${pNum}-board-${cy}-${cx}`);
+                        cell.classList.add(`color-${activePiece.block_type}`, 'filled');
+                    }
+                }
+            }
+        }
+
+        async function fetchState() {
+            try {
+                const res = await fetch('/api/state');
+                const data = await res.json();
+                updatePlayer(1, data.p1, data.p1_wins);
+                updatePlayer(2, data.p2, data.p2_wins);
+            } catch (e) {
+                console.error("Failed to fetch state:", e);
+            }
+        }
+
+        // Initialize grids
+        ['p1', 'p2'].forEach(p => {
+            createGrid(`${p}-board`, false);
+            createGrid(`${p}-hold`, true);
+            createGrid(`${p}-next1`, true);
+            createGrid(`${p}-next2`, true);
+        });
+
+        // Polling loop
+        setInterval(fetchState, 100);
+    </script>
+</body>
+</html>

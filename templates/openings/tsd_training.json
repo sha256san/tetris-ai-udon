@@ -1,0 +1,20 @@
+{
+  "name": "TSD Training",
+  "description": "T-Spin Double training foundation.",
+  "board_map": [
+    "0000000000",
+    "0000000000",
+    "0000000000",
+    "0000000000",
+    "0000000000",
+    "0000000000",
+    "0000000000",
+    "00zz000000",
+    "000zz・・・・・",
+    "・0・・・・・・・・"
+  ],
+  "active_until_lines": 10,
+  "sequence_match_bonus": 30.0,
+  "opening_bonus_per_column": 5.0,
+  "opening_weights": [-2.0, -0.5, -0.8, -7.5, -2.0, 0.5, 0.0, 100.0]
+}

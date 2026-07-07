@@ -152,6 +152,12 @@ pub struct Game {
     pub score: u32,
     pub lines_cleared: u32,
     pub game_over: bool,
+    pub last_action_was_rotate: bool,
+    pub last_t_spin: Option<String>,
+    pub btb: bool,
+    pub pending_garbage: u32,
+    pub last_firepower: u32,
+    pub last_garbage_hole: Option<usize>,
 }
 
 impl Game {
@@ -167,6 +173,12 @@ impl Game {
             score: 0,
             lines_cleared: 0,
             game_over: false,
+            last_action_was_rotate: false,
+            last_t_spin: None,
+            btb: false,
+            pending_garbage: 0,
+            last_firepower: 0,
+            last_garbage_hole: None,
         }
     }
 
@@ -191,6 +203,7 @@ impl Game {
 
         if self.is_valid_position(&next_piece) {
             self.current_piece = next_piece;
+            self.last_action_was_rotate = false;
             true
         } else {
             false
@@ -220,6 +233,7 @@ impl Game {
             test_piece.y += dy;
             if self.is_valid_position(&test_piece) {
                 self.current_piece = test_piece;
+                self.last_action_was_rotate = true;
                 return true;
             }
         }
@@ -285,6 +299,7 @@ impl Game {
         }
 
         self.hold_locked = true;
+        self.last_action_was_rotate = false;
         
         // ホールド直後に衝突している場合は即座にゲームオーバー
         if !self.is_valid_position(&self.current_piece) {
@@ -295,18 +310,100 @@ impl Game {
 
     // ミノを固定し、ライン消去とネクストミノのスポーンを行う
     pub fn lock_piece(&mut self) {
+        let is_t_piece = self.current_piece.block_type == BlockType::T;
+        let was_rotate = self.last_action_was_rotate;
+
         for &(cx, cy) in &self.current_piece.get_cells() {
             if cx >= 0 && cx < BOARD_WIDTH as i32 && cy >= 0 && cy < INTERNAL_HEIGHT as i32 {
                 self.board[cy as usize][cx as usize] = Some(self.current_piece.block_type);
             }
         }
 
+        // T-spinの判定 (ライン消去の前に行う)
+        let mut is_t_spin = false;
+        if is_t_piece && was_rotate {
+            let cx = self.current_piece.x;
+            let cy = self.current_piece.y;
+            let corners = [
+                (cx - 1, cy - 1),
+                (cx + 1, cy - 1),
+                (cx - 1, cy + 1),
+                (cx + 1, cy + 1),
+            ];
+            let mut filled_corners = 0;
+            for &(x, y) in &corners {
+                if x < 0 || x >= BOARD_WIDTH as i32 || y < 0 || y >= INTERNAL_HEIGHT as i32 {
+                    filled_corners += 1;
+                } else if self.board[y as usize][x as usize].is_some() {
+                    filled_corners += 1;
+                }
+            }
+            if filled_corners >= 3 {
+                is_t_spin = true;
+            }
+        }
+
         // ライン消去
         let cleared = self.clear_lines();
         self.lines_cleared += cleared as u32;
-        if cleared < crate::config::game::LINE_CLEAR_SCORES.len() {
-            self.score += crate::config::game::LINE_CLEAR_SCORES[cleared];
+
+        if is_t_spin {
+            let (score_add, t_spin_name) = match cleared {
+                0 => (crate::config::game::TSPIN_0_SCORE, "T-Spin"),
+                1 => (crate::config::game::TSPIN_1_SCORE, "T-Spin Single"),
+                2 => (crate::config::game::TSPIN_2_SCORE, "T-Spin Double"),
+                3 => (crate::config::game::TSPIN_3_SCORE, "T-Spin Triple"),
+                _ => (0, "T-Spin"),
+            };
+            self.score += score_add;
+            self.last_t_spin = Some(t_spin_name.to_string());
+        } else {
+            if cleared < crate::config::game::LINE_CLEAR_SCORES.len() {
+                self.score += crate::config::game::LINE_CLEAR_SCORES[cleared];
+            }
+            self.last_t_spin = None;
         }
+
+        // Damage Calculation
+        let mut firepower = 0;
+        let mut is_btb_eligible = false;
+
+        if is_t_spin {
+            match cleared {
+                1 => { firepower = 1; is_btb_eligible = true; } // TSS
+                2 => { firepower = 4; is_btb_eligible = true; } // TSD
+                3 => { firepower = 6; is_btb_eligible = true; } // TST
+                _ => {}
+            }
+        } else {
+            match cleared {
+                1 => { firepower = 0; }
+                2 => { firepower = 1; }
+                3 => { firepower = 2; }
+                4 => { firepower = 4; is_btb_eligible = true; } // Tetris
+                _ => {}
+            }
+        }
+
+        if is_btb_eligible {
+            if self.btb {
+                firepower += 1;
+            }
+            self.btb = true;
+        } else if cleared > 0 {
+            self.btb = false;
+        }
+
+        // Garbage Cancellation
+        let mut sent = firepower;
+        if self.pending_garbage >= sent {
+            self.pending_garbage -= sent;
+            sent = 0;
+        } else {
+            sent -= self.pending_garbage;
+            self.pending_garbage = 0;
+        }
+        self.last_firepower = sent;
 
         // 深い穴ボーナス
         self.score += get_well_bonus(&self.board);
@@ -315,7 +412,42 @@ impl Game {
         let next_type = self.bag.pop();
         self.current_piece = Piece::new(next_type);
         self.hold_locked = false;
+    }
 
+    pub fn apply_garbage(&mut self) {
+        if self.pending_garbage > 0 {
+            use rand::Rng;
+            let lines = self.pending_garbage;
+            // Move up
+            for y in lines as usize..INTERNAL_HEIGHT {
+                self.board[y - lines as usize] = self.board[y];
+            }
+            let mut rng = rand::thread_rng();
+            for y in (INTERNAL_HEIGHT - lines as usize)..INTERNAL_HEIGHT {
+                let hole = match self.last_garbage_hole {
+                    Some(last_hole) if rng.gen_bool(0.7) => last_hole,
+                    _ => {
+                        let mut new_hole = rng.gen_range(0..BOARD_WIDTH);
+                        if let Some(last_hole) = self.last_garbage_hole {
+                            if new_hole == last_hole {
+                                new_hole = (new_hole + rng.gen_range(1..BOARD_WIDTH)) % BOARD_WIDTH;
+                            }
+                        }
+                        new_hole
+                    }
+                };
+                self.last_garbage_hole = Some(hole);
+
+                for x in 0..BOARD_WIDTH {
+                    if x == hole {
+                        self.board[y][x] = None;
+                    } else {
+                        self.board[y][x] = Some(BlockType::I);
+                    }
+                }
+            }
+            self.pending_garbage = 0;
+        }
         // スポーン時点で衝突していればゲームオーバー
         if !self.is_valid_position(&self.current_piece) {
             self.game_over = true;
@@ -420,6 +552,84 @@ pub fn get_well_bonus(board: &Board) -> u32 {
     }
 }
 
+/// 盤面上の T-spin slot (T-slot) の個数をカウントする
+pub fn count_t_slots(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERNAL_HEIGHT]) -> usize {
+    let mut count = 0;
+    for cy in 1..(INTERNAL_HEIGHT - 1) {
+        for cx in 1..(BOARD_WIDTH - 1) {
+            // 中心セルが空であること
+            if board[cy][cx].is_some() {
+                continue;
+            }
+
+            // 4つの隅（コーナー）のうち、少なくとも3つがブロックか壁で埋まっていること（T-spinの必要条件）
+            let corners = [
+                (cx as i32 - 1, cy as i32 - 1),
+                (cx as i32 + 1, cy as i32 - 1),
+                (cx as i32 - 1, cy as i32 + 1),
+                (cx as i32 + 1, cy as i32 + 1),
+            ];
+            let mut filled_corners = 0;
+            for &(x, y) in &corners {
+                if x < 0 || x >= BOARD_WIDTH as i32 || y < 0 || y >= INTERNAL_HEIGHT as i32 {
+                    filled_corners += 1;
+                } else if board[y as usize][x as usize].is_some() {
+                    filled_corners += 1;
+                }
+            }
+
+            if filled_corners < 3 {
+                continue;
+            }
+
+            // 4つのTの向きについて判定 (0: 上, 1: 右, 2: 下, 3: 左)
+            // それぞれの向きで、Tミノが入る3つのセルが空で、かつ反対側（Tミノの底辺中央の隣）が埋まっているかチェック
+            let cx_i = cx as i32;
+            let cy_i = cy as i32;
+            let orientations = [
+                // 上向き (Tの凸部が上: 左・右・上が空、下が壁/ブロック)
+                ([(cx_i - 1, cy_i), (cx_i + 1, cy_i), (cx_i, cy_i - 1)], (cx_i, cy_i + 1)),
+                // 右向き (Tの凸部が右: 上・下・右が空、左が壁/ブロック)
+                ([(cx_i, cy_i - 1), (cx_i, cy_i + 1), (cx_i + 1, cy_i)], (cx_i - 1, cy_i)),
+                // 下向き (Tの凸部が下: 左・右・下が空、上が壁/ブロック)
+                ([(cx_i - 1, cy_i), (cx_i + 1, cy_i), (cx_i, cy_i + 1)], (cx_i, cy_i - 1)),
+                // 左向き (Tの凸部が左: 上・下・左が空、右が壁/ブロック)
+                ([(cx_i, cy_i - 1), (cx_i, cy_i + 1), (cx_i - 1, cy_i)], (cx_i + 1, cy_i)),
+            ];
+
+            for &(empty_coords, blocked_coord) in &orientations {
+                let mut all_empty = true;
+                for &(ex, ey) in &empty_coords {
+                    if ex < 0 || ex >= BOARD_WIDTH as i32 || ey < 0 || ey >= INTERNAL_HEIGHT as i32 {
+                        all_empty = false;
+                        break;
+                    }
+                    if board[ey as usize][ex as usize].is_some() {
+                        all_empty = false;
+                        break;
+                    }
+                }
+                if !all_empty {
+                    continue;
+                }
+
+                let (bx, by) = blocked_coord;
+                let is_blocked = if bx < 0 || bx >= BOARD_WIDTH as i32 || by < 0 || by >= INTERNAL_HEIGHT as i32 {
+                    true
+                } else {
+                    board[by as usize][bx as usize].is_some()
+                };
+
+                if is_blocked {
+                    count += 1;
+                    break; // この中心セルに少なくとも1つの向きでT-slotが形成されている
+                }
+            }
+        }
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -508,5 +718,48 @@ mod tests {
         board3[INTERNAL_HEIGHT - 4][5] = Some(BlockType::O);
         board3[INTERNAL_HEIGHT - 4][7] = Some(BlockType::O);
         assert_eq!(get_well_bonus(&board3), WELL_BASE_SCORE_TARGET * 3);
+    }
+
+    #[test]
+    fn test_count_t_slots() {
+        let mut board = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
+        assert_eq!(count_t_slots(&board), 0);
+
+        let cy = INTERNAL_HEIGHT - 2;
+        let cx = 2;
+        // 左側を埋める (8, 0 に相当)
+        board[cy][cx - 1] = Some(BlockType::I);
+        // コーナー3つを埋める (右上、左下、右下)
+        board[cy - 1][cx + 1] = Some(BlockType::I);
+        board[cy + 1][cx - 1] = Some(BlockType::I);
+        board[cy + 1][cx + 1] = Some(BlockType::I);
+
+        assert_eq!(count_t_slots(&board), 1);
+    }
+
+    #[test]
+    fn test_t_spin_detection() {
+        let mut game = Game::new();
+        game.board = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
+        
+        let cy = INTERNAL_HEIGHT - 2;
+        let cx = 2;
+        
+        // 3つのコーナーを埋める
+        game.board[cy - 1][cx - 1] = Some(BlockType::I); // 左上
+        game.board[cy - 1][cx + 1] = Some(BlockType::I); // 右上
+        game.board[cy + 1][cx - 1] = Some(BlockType::I); // 左下
+        
+        game.current_piece = Piece {
+            block_type: BlockType::T,
+            x: cx as i32,
+            y: cy as i32,
+            rotation: 2,
+        };
+        
+        game.last_action_was_rotate = true;
+        game.lock_piece();
+        
+        assert!(game.last_t_spin.is_some());
     }
 }

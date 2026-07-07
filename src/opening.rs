@@ -383,7 +383,7 @@ fn match_rotation(bt: BlockType, cells: &[(i32, i32)]) -> Option<(i32, usize)> {
 /// board_map から目標列高さを計算する（board_map の行数分が高さ）
 fn compute_target_heights(rows: &[String]) -> Vec<i32> {
     let _nrows = rows.len() as i32;
-    let ncols = rows.first().map_or(0, |r| r.len());
+    let ncols = rows.first().map_or(0, |r| r.chars().count());
     let mut heights = vec![0i32; ncols];
 
     for c in 0..ncols {
@@ -576,6 +576,48 @@ pub fn evaluate_opening_fit(
         if diff <= tol {
             let closeness = 1.0 - diff / (tol + 1.0);
             bonus += template.opening_bonus_per_column * closeness;
+        }
+    }
+
+    // Exact grid matching for overhangs and holes (e.g. for T-spins and wildcards)
+    let board_map = if let Some(branch) = template.get_active_branch(game) {
+        if bag_index < branch.board_maps.len() {
+            &branch.board_maps[bag_index]
+        } else {
+            branch.board_maps.last().unwrap_or(&branch.board_map)
+        }
+    } else {
+        if bag_index < template.board_maps.len() {
+            &template.board_maps[bag_index]
+        } else {
+            template.board_maps.last().unwrap_or(&template.board_map)
+        }
+    };
+
+    let nrows = board_map.len();
+    if nrows > 0 {
+        for (r, row_str) in board_map.iter().enumerate() {
+            let board_y = INTERNAL_HEIGHT - nrows + r;
+            if board_y >= INTERNAL_HEIGHT { continue; }
+            
+            for (c, ch) in row_str.chars().enumerate() {
+                if c >= BOARD_WIDTH { break; }
+                
+                let is_filled_on_board = board[board_y][c].is_some();
+                let is_target_filled = ch != '0' && ch != '_' && ch != ' ';
+                
+                if is_target_filled {
+                    if is_filled_on_board {
+                        // Reward for filling a target cell
+                        bonus += template.opening_bonus_per_column * 0.5;
+                    }
+                } else {
+                    if is_filled_on_board {
+                        // Heavy penalty for filling a cell that MUST be empty (like holes under overhangs)
+                        bonus -= template.opening_bonus_per_column * 3.0;
+                    }
+                }
+            }
         }
     }
 

@@ -5,6 +5,7 @@ mod rl;
 mod ui;
 mod config;
 mod opening;
+mod server;
 
 use std::fs::{self, File};
 use std::io::{stdout, Write};
@@ -27,7 +28,7 @@ fn load_model_or_default() -> AiModel {
     if let Ok(file) = File::open(MODEL_PATH) {
         let reader = std::io::BufReader::new(file);
         if let Ok(model) = serde_json::from_reader::<_, AiModel>(reader) {
-            if model.weights.len() == 8 {
+            if model.weights.len() == 9 {
                 return model;
             }
         }
@@ -58,6 +59,13 @@ fn main() -> std::io::Result<()> {
             4 => run_rl_mode(&mut model)?,
             5 => run_load_template_mode(&mut model, &mut active_opening)?,
             6 => run_opening_editor()?,
+            7 => run_free_play_mode(&model)?,
+            8 => run_rl_t_spin_training_mode(&mut model)?,
+            9 => {
+                let _ = ui::restore_terminal();
+                tokio::runtime::Runtime::new().unwrap().block_on(server::start_server());
+                let _ = ui::init_terminal();
+            },
             _ => break, // Exit
         }
     }
@@ -106,12 +114,21 @@ fn show_menu(model: &AiModel, active_opening: Option<&OpeningTemplate>) -> std::
         cursor::MoveTo(menu_x + 2, menu_y + 11),
         SetForegroundColor(Color::Cyan),
         Print("[6] Opening Editor (Open Browser)"),
+        cursor::MoveTo(menu_x + 2, menu_y + 12),
+        SetForegroundColor(Color::Rgb { r: 180, g: 180, b: 255 }),
+        Print("[7] Free Play Mode (T-spin Practice)"),
         cursor::MoveTo(menu_x + 2, menu_y + 13),
+        SetForegroundColor(Color::Rgb { r: 255, g: 120, b: 120 }),
+        Print("[8] T-spin RL (TSD Training)"),
+        cursor::MoveTo(menu_x + 2, menu_y + 14),
+        SetForegroundColor(Color::Rgb { r: 150, g: 255, b: 150 }),
+        Print("[9] Start AI Battle Web Server"),
+        cursor::MoveTo(menu_x + 2, menu_y + 16),
         SetForegroundColor(Color::Red),
         Print("[Esc] Exit"),
         ResetColor,
         // オープニング状態の表示
-        cursor::MoveTo(menu_x, menu_y + 14),
+        cursor::MoveTo(menu_x, menu_y + 17),
         SetForegroundColor(Color::Rgb { r: 100, g: 200, b: 255 }),
         Print(format!("Opening: {}",
             active_opening.map_or("None (normal mode)".to_string(), |o| {
@@ -119,13 +136,16 @@ fn show_menu(model: &AiModel, active_opening: Option<&OpeningTemplate>) -> std::
             })
         )),
         // 現在のモデル状態の表示
-        cursor::MoveTo(menu_x, menu_y + 15),
+        cursor::MoveTo(menu_x, menu_y + 18),
         SetForegroundColor(Color::DarkGrey),
         Print("--- Current Model Weights ---"),
-        cursor::MoveTo(menu_x, menu_y + 16),
-        Print(format!("MaxHeight: {:.2} | AvgHeight: {:.2} | Bumpy: {:.2} | Holes: {:.2}", model.weights[0], model.weights[1], model.weights[2], model.weights[3])),
-        cursor::MoveTo(menu_x, menu_y + 17),
-        Print(format!("AbvHoles: {:.2} | Wells: {:.2} | Clr13: {:.2} | Tetrs: {:.2}", model.weights[4], model.weights[5], model.weights[6], model.weights[7])),
+        cursor::MoveTo(menu_x, menu_y + 19),
+        Print(format!("MaxH: {:.2} | AvgH: {:.2} | Bumpy: {:.2} | Holes: {:.2}", model.weights[0], model.weights[1], model.weights[2], model.weights[3])),
+        cursor::MoveTo(menu_x, menu_y + 20),
+        Print(format!("AbvH: {:.2} | Wells: {:.2} | Clr13: {:.2} | Tetrs: {:.2}{}", 
+            model.weights[4], model.weights[5], model.weights[6], model.weights[7],
+            if model.weights.len() > 8 { format!(" | TSlot: {:.2}", model.weights[8]) } else { "".to_string() }
+        )),
         ResetColor
     )?;
     out.flush()?;
@@ -140,6 +160,9 @@ fn show_menu(model: &AiModel, active_opening: Option<&OpeningTemplate>) -> std::
                     KeyCode::Char('4') => return Ok(4),
                     KeyCode::Char('5') => return Ok(5),
                     KeyCode::Char('6') => return Ok(6),
+                    KeyCode::Char('7') => return Ok(7),
+                    KeyCode::Char('8') => return Ok(8),
+                    KeyCode::Char('9') => return Ok(9),
                     KeyCode::Esc => return Ok(0),
                     _ => {}
                 }
@@ -166,7 +189,8 @@ fn run_play_mode(model: &AiModel) -> std::io::Result<()> {
     let mut last_drop = Instant::now();
     let drop_interval = Duration::from_millis(700);
 
-    ui::draw_game(&game, model, "Human Play (Recording...)", None, None, 0)?;
+    let mut future_pieces = ai::simulate_future_moves(&game, model, None, 0);
+    ui::draw_game(&game, model, &future_pieces, "Human Play (Recording...)", None)?;
 
     loop {
         let mut piece_locked = false;
@@ -200,6 +224,7 @@ fn run_play_mode(model: &AiModel) -> std::io::Result<()> {
                             initial_hold = game.hold_piece;
                             initial_hold_locked = game.hold_locked;
                             initial_next = game.bag.peek_next(5);
+                            future_pieces = ai::simulate_future_moves(&game, model, None, 0);
                         }
                     }
                     KeyCode::Char(' ') => {
@@ -226,7 +251,7 @@ fn run_play_mode(model: &AiModel) -> std::io::Result<()> {
                     }
                     _ => {}
                 }
-                ui::draw_game(&game, model, "Human Play (Recording...)", None, None, 0)?;
+                ui::draw_game(&game, model, &future_pieces, "Human Play (Recording...)", None)?;
             }
         }
 
@@ -252,7 +277,7 @@ fn run_play_mode(model: &AiModel) -> std::io::Result<()> {
                 piece_locked = true;
             }
             last_drop = Instant::now();
-            ui::draw_game(&game, model, "Human Play (Recording...)", None, None, 0)?;
+            ui::draw_game(&game, model, &future_pieces, "Human Play (Recording...)", None)?;
         }
 
         if piece_locked {
@@ -280,7 +305,8 @@ fn run_play_mode(model: &AiModel) -> std::io::Result<()> {
             initial_next = game.bag.peek_next(5);
             used_hold_this_turn = false;
 
-            ui::draw_game(&game, model, "Human Play (Recording...)", None, None, 0)?;
+            future_pieces = ai::simulate_future_moves(&game, model, None, 0);
+            ui::draw_game(&game, model, &future_pieces, "Human Play (Recording...)", None)?;
         }
     }
 
@@ -295,13 +321,127 @@ fn run_play_mode(model: &AiModel) -> std::io::Result<()> {
     Ok(())
 }
 
+// 7. フリープレイモード (T-spin 練習)
+fn run_free_play_mode(model: &AiModel) -> std::io::Result<()> {
+    loop {
+        execute!(stdout(), terminal::Clear(terminal::ClearType::All))?;
+        
+        let mut game = Game::new();
+        let mut last_drop = Instant::now();
+        let drop_interval = Duration::from_millis(700);
+
+        ui::draw_game(&game, model, &[], "Free Play (Practice)", None)?;
+
+        let mut restart_requested = false;
+
+        loop {
+            let mut piece_locked = false;
+
+            if event::poll(Duration::from_millis(50))? {
+                if let Event::Key(key_event) = event::read()? {
+                    match key_event.code {
+                        KeyCode::Left => {
+                            game.try_move(-1, 0);
+                        }
+                        KeyCode::Right => {
+                            game.try_move(1, 0);
+                        }
+                        KeyCode::Down => {
+                            if game.try_move(0, 1) {
+                                last_drop = Instant::now();
+                            }
+                        }
+                        KeyCode::Up | KeyCode::Char('x') => {
+                            game.try_rotate(RotationDirection::Clockwise);
+                        }
+                        KeyCode::Char('z') => {
+                            game.try_rotate(RotationDirection::CounterClockwise);
+                        }
+                        KeyCode::Char('c') | KeyCode::Char('C') => {
+                            game.hold();
+                        }
+                        KeyCode::Char(' ') => {
+                            game.hard_drop();
+                            piece_locked = true;
+                        }
+                        KeyCode::Esc => {
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
+                    ui::draw_game(&game, model, &[], "Free Play (Practice)", None)?;
+                }
+            }
+
+            if last_drop.elapsed() >= drop_interval {
+                if !game.try_move(0, 1) {
+                    game.lock_piece();
+                    piece_locked = true;
+                }
+                last_drop = Instant::now();
+                ui::draw_game(&game, model, &[], "Free Play (Practice)", None)?;
+            }
+
+            if piece_locked {
+                if game.game_over {
+                    // ゲームオーバー表示とリトライ案内
+                    let mut out = stdout();
+                    queue!(
+                        out,
+                        cursor::MoveTo(ui::UI_X_OFFSET + 1, ui::UI_Y_OFFSET + 9),
+                        SetBackgroundColor(Color::Red),
+                        SetForegroundColor(Color::White),
+                        Print("   GAME OVER   "),
+                        cursor::MoveTo(ui::UI_X_OFFSET - 3, ui::UI_Y_OFFSET + 11),
+                        SetBackgroundColor(Color::Black),
+                        SetForegroundColor(Color::Yellow),
+                        Print("Press Enter to Retry"),
+                        cursor::MoveTo(ui::UI_X_OFFSET - 2, ui::UI_Y_OFFSET + 12),
+                        Print("Press Esc to Exit"),
+                        ResetColor
+                    )?;
+                    out.flush()?;
+                    
+                    // 入力待ち
+                    loop {
+                        if event::poll(Duration::from_millis(100))? {
+                            if let Event::Key(key_event) = event::read()? {
+                                match key_event.code {
+                                    KeyCode::Enter => {
+                                        restart_requested = true;
+                                        break;
+                                    }
+                                    KeyCode::Esc => {
+                                        return Ok(());
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+                if restart_requested || game.game_over {
+                    break;
+                }
+                ui::draw_game(&game, model, &[], "Free Play (Practice)", None)?;
+            }
+        }
+
+        if !restart_requested {
+            break;
+        }
+    }
+    Ok(())
+}
+
 // 2. AI自動デモプレイモード
 fn run_ai_mode(model: &AiModel, opening: Option<&OpeningTemplate>) -> std::io::Result<()> {
     execute!(stdout(), terminal::Clear(terminal::ClearType::All))?;
     
     let mut game = Game::new();
     let mut opening_turn: usize = 0;  // オープニングシーケンスの現在の手番
-    ui::draw_game(&game, model, "AI Auto Play", None, opening, opening_turn)?;
+    let mut future_pieces = ai::simulate_future_moves(&game, model, opening, opening_turn);
+    ui::draw_game(&game, model, &future_pieces, "AI Auto Play", None)?;
 
     let step_delay = Duration::from_millis(150);
 
@@ -342,31 +482,53 @@ fn run_ai_mode(model: &AiModel, opening: Option<&OpeningTemplate>) -> std::io::R
         // ホールドのアニメーション
         if best_move.use_hold {
             game.hold();
-            ui::draw_game(&game, model, "AI Auto Play", None, opening, opening_turn)?;
+            ui::draw_game(&game, model, &future_pieces, "AI Auto Play", None)?;
             std::thread::sleep(step_delay);
         }
 
-        // 回転を合わせるアニメーション
-        let target_rot = best_move.final_piece.rotation;
-        while game.current_piece.rotation != target_rot {
-            game.try_rotate(RotationDirection::Clockwise);
-            ui::draw_game(&game, model, "AI Auto Play", None, opening, opening_turn)?;
-            std::thread::sleep(Duration::from_millis(50));
-        }
-
-        // Xを合わせるアニメーション
+        // 1. 移動を試みる（壁やブロックにぶつかるまで）
         let target_x = best_move.final_piece.x;
         while game.current_piece.x != target_x {
             let dx = if target_x > game.current_piece.x { 1 } else { -1 };
-            game.try_move(dx, 0);
-            ui::draw_game(&game, model, "AI Auto Play", None, opening, opening_turn)?;
+            if !game.try_move(dx, 0) {
+                break; // 移動できない場合は一旦終了（後で回転後に再試行）
+            }
+            ui::draw_game(&game, model, &future_pieces, "AI Auto Play", None)?;
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        // 2. 回転を合わせるアニメーション
+        let target_rot = best_move.final_piece.rotation;
+        while game.current_piece.rotation != target_rot {
+            let old_rot = game.current_piece.rotation;
+            game.try_rotate(RotationDirection::Clockwise);
+            if game.current_piece.rotation == old_rot {
+                break; // 回転できなかった場合は無限ループ防止
+            }
+            ui::draw_game(&game, model, &future_pieces, "AI Auto Play", None)?;
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        // 3. 回転後にさらにXを合わせる（ウォールキック等でずれた場合の補正）
+        while game.current_piece.x != target_x {
+            let dx = if target_x > game.current_piece.x { 1 } else { -1 };
+            if !game.try_move(dx, 0) {
+                break;
+            }
+            ui::draw_game(&game, model, &future_pieces, "AI Auto Play", None)?;
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        // 4. 万が一、最終位置・回転に到達できなかった場合のフェイルセーフ
+        if game.current_piece.x != target_x || game.current_piece.rotation != target_rot {
+            game.current_piece.x = target_x;
+            game.current_piece.rotation = target_rot;
+            ui::draw_game(&game, model, &future_pieces, "AI Auto Play", None)?;
             std::thread::sleep(Duration::from_millis(50));
         }
 
         // ハードドロップして固定
         game.hard_drop();
-        ui::draw_game(&game, model, "AI Auto Play", None, opening, opening_turn)?;
-        std::thread::sleep(step_delay);
 
         // オープニングシーケンスが有効な間はターンを進める
         if let Some(op) = opening {
@@ -379,6 +541,10 @@ fn run_ai_mode(model: &AiModel, opening: Option<&OpeningTemplate>) -> std::io::R
                 opening_turn += 1;
             }
         }
+
+        future_pieces = ai::simulate_future_moves(&game, model, opening, opening_turn);
+        ui::draw_game(&game, model, &future_pieces, "AI Auto Play", None)?;
+        std::thread::sleep(step_delay);
     }
 
     Ok(())
@@ -496,7 +662,7 @@ fn run_rl_mode(model: &mut AiModel) -> std::io::Result<()> {
     let mut ep = 0;
     let mut lines_cleared_history = Vec::new();
 
-    ui::draw_game(&game, model, "Reinforcement Learning (Training...)", Some((ep, 0.0, epsilon)), None, 0)?;
+    ui::draw_game(&game, model, &[], "Reinforcement Learning (Training...)", Some((ep, 0.0, epsilon)))?;
 
     loop {
         // キー入力監視 (Escで中断)
@@ -527,7 +693,7 @@ fn run_rl_mode(model: &mut AiModel) -> std::io::Result<()> {
         if ep % 5 == 0 {
             // ダミーのゲームを画面描画用に反映
             let draw_game = Game::new(); // 静的な状態でもよい
-            ui::draw_game(&draw_game, model, "Reinforcement Learning (Training...)", Some((ep, avg_lines, epsilon)), None, 0)?;
+            ui::draw_game(&draw_game, model, &[], "Reinforcement Learning (Training...)", Some((ep, avg_lines, epsilon)))?;
         }
     }
 
@@ -541,6 +707,210 @@ fn run_rl_mode(model: &mut AiModel) -> std::io::Result<()> {
         cursor::MoveTo(5, 5),
         SetForegroundColor(Color::Green),
         Print("Reinforcement Learning Paused and Saved!"),
+        cursor::MoveTo(5, 7),
+        SetForegroundColor(Color::White),
+        Print(format!("Total Trained Episodes: {}", ep)),
+        cursor::MoveTo(5, 8),
+        Print(format!("Saved model weights to '{}'.", MODEL_PATH)),
+        cursor::MoveTo(5, 10),
+        Print("Press any key to return to menu..."),
+        ResetColor
+    )?;
+    out.flush()?;
+
+    loop {
+        if event::poll(Duration::from_millis(100))? {
+            let _ = event::read()?;
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(serde::Deserialize, Clone)]
+struct TsdTrainingBranch {
+    board_map: Option<Vec<String>>,
+    board_maps: Option<Vec<Vec<String>>>,
+}
+
+#[derive(serde::Deserialize, Clone)]
+struct TsdTrainingTemplate {
+    board_map: Option<Vec<String>>,
+    board_maps: Option<Vec<Vec<String>>>,
+    branches: Option<Vec<TsdTrainingBranch>>,
+    training_setup_piece: Option<String>,
+    training_next_pieces: Option<Vec<String>>,
+}
+
+struct TrainingSetup {
+    map: Vec<String>,
+    next_pieces: Vec<tetris::BlockType>,
+}
+
+// 4.5. T-spin強化学習トレーニングモード
+fn run_rl_t_spin_training_mode(model: &mut AiModel) -> std::io::Result<()> {
+    use rand::Rng;
+    execute!(stdout(), terminal::Clear(terminal::ClearType::All))?;
+    
+    let mut game = Game::new();
+    
+    // Load training setups
+    let mut training_setups: Vec<TrainingSetup> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir("templates/tsd_training") {
+        for entry in entries.filter_map(|e| e.ok()) {
+            if entry.path().extension().map_or(false, |ext| ext == "json") {
+                if let Ok(file) = std::fs::File::open(entry.path()) {
+                    let reader = std::io::BufReader::new(file);
+                    if let Ok(tmpl) = serde_json::from_reader::<_, TsdTrainingTemplate>(reader) {
+                        let mut next_pieces = Vec::new();
+                        if let Some(pieces) = tmpl.training_next_pieces {
+                            for p in pieces {
+                                let block = match p.to_uppercase().as_str() {
+                                    "I" => tetris::BlockType::I,
+                                    "O" => tetris::BlockType::O,
+                                    "T" => tetris::BlockType::T,
+                                    "S" => tetris::BlockType::S,
+                                    "Z" => tetris::BlockType::Z,
+                                    "L" => tetris::BlockType::L,
+                                    _ => tetris::BlockType::J,
+                                };
+                                next_pieces.push(block);
+                            }
+                        } else if let Some(setup_str) = tmpl.training_setup_piece {
+                            let block = match setup_str.to_uppercase().as_str() {
+                                "I" => tetris::BlockType::I,
+                                "O" => tetris::BlockType::O,
+                                "T" => tetris::BlockType::T,
+                                "S" => tetris::BlockType::S,
+                                "Z" => tetris::BlockType::Z,
+                                "L" => tetris::BlockType::L,
+                                _ => tetris::BlockType::J,
+                            };
+                            next_pieces.push(block);
+                            next_pieces.push(tetris::BlockType::T);
+                        } else {
+                            next_pieces.push(tetris::BlockType::J);
+                            next_pieces.push(tetris::BlockType::T);
+                        }
+
+                        let mut maps_to_add = Vec::new();
+
+                        if let Some(branches) = tmpl.branches {
+                            if let Some(branch) = branches.first() {
+                                if let Some(maps) = &branch.board_maps {
+                                    maps_to_add.push(maps[0].clone());
+                                } else if let Some(map) = &branch.board_map {
+                                    maps_to_add.push(map.clone());
+                                }
+                            }
+                        } else if let Some(maps) = tmpl.board_maps {
+                            maps_to_add.push(maps[0].clone());
+                        } else if let Some(map) = tmpl.board_map {
+                            maps_to_add.push(map);
+                        }
+
+                        for map in maps_to_add {
+                            training_setups.push(TrainingSetup {
+                                map,
+                                next_pieces: next_pieces.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback if no valid custom templates are found
+    if training_setups.is_empty() {
+        training_setups.push(TrainingSetup {
+            map: vec![
+                "0000000000".to_string(),
+                "0000000000".to_string(),
+                "0000000000".to_string(),
+                "0000000000".to_string(),
+                "0000000000".to_string(),
+                "0000000000".to_string(),
+                "0000000000".to_string(),
+                "00zz000000".to_string(),
+                "000zz・・・・・".to_string(),
+                "・0・・・・・・・・".to_string(),
+            ],
+            next_pieces: vec![tetris::BlockType::J, tetris::BlockType::T],
+        });
+        training_setups.push(TrainingSetup {
+            map: vec![
+                "0000000000".to_string(),
+                "0000000000".to_string(),
+                "0000000000".to_string(),
+                "0000000000".to_string(),
+                "0000000000".to_string(),
+                "0000000000".to_string(),
+                "000000oo00".to_string(),
+                "000000oo00".to_string(),
+                "・・・・・・・000".to_string(),
+                "・・・・・・・・0・".to_string(),
+            ],
+            next_pieces: vec![tetris::BlockType::Z, tetris::BlockType::T],
+        });
+    }
+
+    // Set initial board for UI to display before training loop starts
+    rl::set_board_from_strings(&mut game.board, &training_setups[0].map);
+
+    let alpha = 0.002;
+    let gamma = 0.90;
+    let mut epsilon = 0.15;
+    let min_epsilon = 0.01;
+    let epsilon_decay = 0.995;
+
+    let mut ep = 0;
+    let mut success_history = Vec::new();
+
+    ui::draw_game(&game, model, &[], "RL TSD Training (Training...)", Some((ep, 0.0, epsilon)))?;
+
+    let mut rng = rand::thread_rng();
+
+    loop {
+        if event::poll(Duration::from_millis(5))? {
+            if let Event::Key(key_event) = event::read()? {
+                if key_event.code == KeyCode::Esc {
+                    break;
+                }
+            }
+        }
+
+        let idx = rng.gen_range(0..training_setups.len());
+        let setup = &training_setups[idx];
+
+        let (success, _turns, _reward) = rl::run_rl_t_spin_training_episode(
+            model, epsilon, alpha, gamma, &setup.map, &setup.next_pieces
+        );
+        ep += 1;
+        success_history.push(if success { 1.0 } else { 0.0 });
+
+        epsilon = (epsilon * epsilon_decay).max(min_epsilon);
+
+        let window_size = 50.min(success_history.len());
+        let start_idx = success_history.len() - window_size;
+        let recent_successes = &success_history[start_idx..];
+        let success_rate = (recent_successes.iter().sum::<f32>() / window_size as f32) * 100.0;
+
+        if ep % 5 == 0 {
+            ui::draw_game(&game, model, &[], "RL TSD Training (Training...)", Some((ep, success_rate, epsilon)))?;
+        }
+    }
+
+    save_model(model)?;
+
+    let mut out = stdout();
+    execute!(out, terminal::Clear(terminal::ClearType::All))?;
+    queue!(
+        out,
+        cursor::MoveTo(5, 5),
+        SetForegroundColor(Color::Green),
+        Print("T-Spin RL Training Paused and Saved!"),
         cursor::MoveTo(5, 7),
         SetForegroundColor(Color::White),
         Print(format!("Total Trained Episodes: {}", ep)),
@@ -678,7 +1048,7 @@ fn run_load_template_mode(model: &mut AiModel, active_opening: &mut Option<Openi
                                 Ok(file) => {
                                     let reader = std::io::BufReader::new(file);
                                     match serde_json::from_reader::<_, AiModel>(reader) {
-                                        Ok(loaded) if loaded.weights.len() == 8 => {
+                                        Ok(loaded) if loaded.weights.len() == 9 => {
                                             *model = loaded;
                                             save_model(model)?;
                                             let name = path.file_stem().unwrap_or_default().to_string_lossy();
@@ -688,7 +1058,7 @@ fn run_load_template_mode(model: &mut AiModel, active_opening: &mut Option<Openi
                                                 Color::Green,
                                             )?;
                                         }
-                                        _ => show_confirm_msg(&mut out, "Error: invalid weight template (need 8 weights).", Color::Red)?,
+                                        _ => show_confirm_msg(&mut out, "Error: invalid weight template (need 9 weights).", Color::Red)?,
                                     }
                                 }
                                 Err(e) => show_confirm_msg(&mut out, &format!("Error: {}", e), Color::Red)?,

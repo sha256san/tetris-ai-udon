@@ -28,6 +28,7 @@
             --color-z: #f00000;
             --color-j: #0000f0;
             --color-l: #f0a000;
+            --color-wildcard: #7f8c8d;
         }
 
         * {
@@ -313,6 +314,7 @@
         .palette-z { background-color: var(--color-z); color: #fff; }
         .palette-j { background-color: var(--color-j); color: #fff; }
         .palette-l { background-color: var(--color-l); color: #000; }
+        .palette-wildcard { background-color: var(--color-wildcard); color: #fff; }
 
         /* グリッド本体 */
         .tetris-grid {
@@ -356,6 +358,7 @@
         .cell-z { background-color: var(--color-z); color: rgba(255,255,255,0.4); }
         .cell-j { background-color: var(--color-j); color: rgba(255,255,255,0.4); }
         .cell-l { background-color: var(--color-l); color: rgba(0,0,0,0.3); }
+        .cell-wildcard { background-color: var(--color-wildcard); color: rgba(255,255,255,0.5); }
 
         /* 非アクティブ巡目のプレビュースタイル */
         .cell-preview {
@@ -643,6 +646,7 @@
                     <div class="palette-item palette-z" data-type="z">z</div>
                     <div class="palette-item palette-j" data-type="j">j</div>
                     <div class="palette-item palette-l" data-type="l">l</div>
+                    <div class="palette-item palette-wildcard" data-type="・">・</div>
                 </div>
 
                 <!-- テトリスグリッド -->
@@ -654,7 +658,7 @@
                 </div>
 
                 <div class="shortcuts-info">
-                    Keyboard Shortcuts: <kbd>0</kbd>〜<kbd>7</kbd> or <kbd>I</kbd>,<kbd>O</kbd>,<kbd>T</kbd>,<kbd>S</kbd>,<kbd>Z</kbd>,<kbd>J</kbd>,<kbd>L</kbd> to change palette
+                    Keyboard Shortcuts: <kbd>0</kbd>〜<kbd>7</kbd>, <kbd>8</kbd> or <kbd>I</kbd>,<kbd>O</kbd>,<kbd>T</kbd>,<kbd>S</kbd>,<kbd>Z</kbd>,<kbd>J</kbd>,<kbd>L</kbd>, <kbd>W</kbd> to change palette (8/W for wildcard ・)
                 </div>
             </div>
 
@@ -666,6 +670,11 @@
                         <div class="form-group">
                             <label for="meta-name">Template Name</label>
                             <input type="text" id="meta-name" value="Custom Stacking">
+                        </div>
+                        <div class="form-group">
+                            <label for="meta-next-pieces">Training Next Pieces</label>
+                            <input type="text" id="meta-next-pieces" placeholder="e.g. J, T" value="">
+                            <small style="font-size: 0.8em; color: #888;">Comma-separated sequence of pieces (I,O,T,S,Z,J,L)</small>
                         </div>
                         <div class="form-group">
                             <label for="meta-lines">Active Until Lines</label>
@@ -740,7 +749,8 @@
             's': 'cell-s',
             'z': 'cell-z',
             'j': 'cell-j',
-            'l': 'cell-l'
+            'l': 'cell-l',
+            '・': 'cell-wildcard'
         };
 
         // テトリミノ定義と回転パターン
@@ -806,6 +816,7 @@
         const metaSeqBonus = document.getElementById('meta-seq-bonus');
         const metaColBonus = document.getElementById('meta-col-bonus');
         const metaWeights = document.getElementById('meta-weights');
+        const metaNextPieces = document.getElementById('meta-next-pieces');
 
         // 初期化
         function init() {
@@ -957,6 +968,7 @@
                 else if (key === '5' || key === 'z') type = 'z';
                 else if (key === '6' || key === 'j') type = 'j';
                 else if (key === '7' || key === 'l') type = 'l';
+                else if (key === '8' || key === 'w') type = '・';
 
                 if (type !== null) {
                     const btn = document.querySelector(`.palette-item[data-type="${type}"]`);
@@ -1054,6 +1066,13 @@
                     if (json.name) metaName.value = json.name;
                     if (json.active_until_lines) metaLines.value = json.active_until_lines;
                     if (json.description) metaDesc.value = json.description;
+                    if (json.training_next_pieces && Array.isArray(json.training_next_pieces)) {
+                        metaNextPieces.value = json.training_next_pieces.join(', ');
+                    } else if (json.training_setup_piece) {
+                        metaNextPieces.value = json.training_setup_piece + ", T";
+                    } else {
+                        metaNextPieces.value = "";
+                    }
                     if (json.sequence_match_bonus) metaSeqBonus.value = json.sequence_match_bonus;
                     if (json.opening_bonus_per_column) metaColBonus.value = json.opening_bonus_per_column;
                     if (json.opening_weights && Array.isArray(json.opening_weights)) {
@@ -1145,7 +1164,7 @@
             }
 
             // メタデータ変更イベント
-            const metaInputs = [metaName, metaLines, metaDesc, metaSeqBonus, metaColBonus, metaWeights];
+            const metaInputs = [metaName, metaLines, metaDesc, metaSeqBonus, metaColBonus, metaWeights, metaNextPieces];
             metaInputs.forEach(input => {
                 input.addEventListener('input', updateJSON);
             });
@@ -1292,6 +1311,12 @@
                 opening_weights: weights
             };
 
+            if (metaNextPieces.value.trim() !== "") {
+                obj.training_next_pieces = metaNextPieces.value.split(',')
+                    .map(s => s.trim().toUpperCase())
+                    .filter(s => ['I','O','T','S','Z','J','L'].includes(s));
+            }
+
             const isGridEmpty = (grid) => grid.every(row => row.every(cell => cell === '0'));
 
             // 2巡目または3巡目のグリッドが1マスでも埋まっていれば複数巡目(board_maps)としてエクスポート
@@ -1331,7 +1356,7 @@
             for (let r = 0; r < boardHeight; r++) {
                 for (let c = 0; c < BOARD_WIDTH; c++) {
                     const ch = activeGrid[r][c];
-                    if (ch === '0' || visited[r][c]) continue;
+                    if (ch === '0' || ch === '・' || visited[r][c]) continue;
                     
                     const cells = [];
                     const queue = [[r, c]];

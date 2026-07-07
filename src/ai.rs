@@ -1,5 +1,6 @@
 use crate::tetris::{Game, Piece, Board, BlockType, BOARD_WIDTH, INTERNAL_HEIGHT, get_well_bonus};
 use serde::{Serialize, Deserialize};
+use rayon::prelude::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiModel {
@@ -99,6 +100,7 @@ pub fn extract_features(board: &Board, cleared_lines: usize) -> Vec<f32> {
 
     let cleared_1_3 = if cleared_lines < 4 { cleared_lines as f32 } else { 0.0 };
     let cleared_4 = if cleared_lines == 4 { 1.0 } else { 0.0 };
+    let t_slots = crate::tetris::count_t_slots(board) as f32;
 
     vec![
         max_height,
@@ -109,12 +111,12 @@ pub fn extract_features(board: &Board, cleared_lines: usize) -> Vec<f32> {
         wells_depth as f32,
         cleared_1_3,
         cleared_4,
+        t_slots,
     ]
 }
 
-// すべての可能な配置（候補手）を列挙する
-// opening_turn: オープニングシーケンスの何手目か（0-indexed）
-pub fn enumerate_all_moves(
+// すべての可能な配置（候補手）を列挙する（先読みなしのベース版）
+pub fn enumerate_all_moves_base(
     game: &Game,
     model: &AiModel,
     opening: Option<&crate::opening::OpeningTemplate>,
@@ -142,6 +144,88 @@ pub fn enumerate_all_moves(
     moves
 }
 
+// すべての可能な配置（候補手）を列挙し、Nextキューに基づき将来の盤面評価を先読み(Lookahead)してスコアを再計算する
+pub fn enumerate_all_moves(
+    game: &Game,
+    model: &AiModel,
+    opening: Option<&crate::opening::OpeningTemplate>,
+    opening_turn: usize,
+) -> Vec<CandidateMove> {
+    let mut moves = enumerate_all_moves_base(game, model, opening, opening_turn);
+    
+    // オープニング中は先読みをせず、目標の固定配置通りに置くためそのまま返す
+    let is_opening_active = opening
+        .map_or(false, |o| game.lines_cleared < o.active_until_lines);
+    if is_opening_active {
+        return moves;
+    }
+
+    // 各候補手に対して、将来のGreedyシミュレーションをマルチコア並列で実行してスコアを更新
+    let discount = crate::config::heuristic::LOOKAHEAD_DISCOUNT_FACTOR;
+    
+    moves.par_iter_mut().for_each(|m| {
+        let mut temp_game = game.clone();
+        
+        // 候補手を適用
+        if m.use_hold {
+            temp_game.hold();
+        }
+        temp_game.current_piece.x = m.final_piece.x;
+        temp_game.current_piece.rotation = m.final_piece.rotation;
+        temp_game.hard_drop();
+        
+        let mut total_score = m.eval_score;
+        let mut current_discount = discount;
+        let mut curr_turn = opening_turn + 1;
+        let mut game_over_penalty_applied = false;
+        
+        // Nextキューにあるピース（最大5個）をシミュレート
+        let num_nexts = temp_game.bag.peek_next(5).len();
+        
+        for _ in 0..num_nexts {
+            if temp_game.game_over {
+                total_score += crate::config::rl::GAME_OVER_PENALTY * current_discount;
+                game_over_penalty_applied = true;
+                break;
+            }
+            
+            // ベース評価で次ターンの最善手を選択
+            let next_moves = enumerate_all_moves_base(&temp_game, model, opening, curr_turn);
+            if next_moves.is_empty() {
+                temp_game.game_over = true;
+                total_score += crate::config::rl::GAME_OVER_PENALTY * current_discount;
+                game_over_penalty_applied = true;
+                break;
+            }
+            
+            let best_next = &next_moves[0];
+            total_score += best_next.eval_score * current_discount;
+            
+            // シミュレートした手を適用
+            if best_next.use_hold {
+                temp_game.hold();
+            }
+            temp_game.current_piece.x = best_next.final_piece.x;
+            temp_game.current_piece.rotation = best_next.final_piece.rotation;
+            temp_game.hard_drop();
+            
+            // 割引率を累積
+            current_discount *= discount;
+            curr_turn += 1;
+        }
+        
+        if temp_game.game_over && !game_over_penalty_applied {
+            total_score += crate::config::rl::GAME_OVER_PENALTY * current_discount;
+        }
+        
+        m.eval_score = total_score;
+    });
+    
+    // 再度スコアの降順でソート
+    moves.sort_by(|a, b| b.eval_score.partial_cmp(&a.eval_score).unwrap_or(std::cmp::Ordering::Equal));
+    moves
+}
+
 // 特定のミノ種について、配置候補を全探索して moves に追加
 fn enumerate_moves_for_piece(
     game: &Game,
@@ -153,9 +237,9 @@ fn enumerate_moves_for_piece(
     moves: &mut Vec<CandidateMove>,
 ) {
     let spawn_x = match block_type {
-        BlockType::I => 3,
-        BlockType::O => 4,
-        _ => 3,
+        BlockType::I => 4,
+        BlockType::O => 5,
+        _ => 4,
     };
 
     // 回転状態 0〜3 を試す
@@ -272,6 +356,71 @@ fn enumerate_moves_for_piece(
                         let ai_bonus = (well_bonus_score as f32) * crate::config::heuristic::WELL_BONUS_MULTIPLIER;
                         eval_score += ai_bonus;
                     }
+
+                    // 1) 4〜7列目（index 3〜6）の空洞(hole)ペナルティ
+                    // 4〜7列目のいずれかの列にブロックがあり、その下に空きマスがあるかをチェック
+                    let mut has_target_hole = false;
+                    for x in 3..=6 {
+                        let mut block_found = false;
+                        for y in 0..INTERNAL_HEIGHT {
+                            if temp_board_after_clear[y][x].is_some() {
+                                block_found = true;
+                            } else if block_found {
+                                has_target_hole = true;
+                                break;
+                            }
+                        }
+                        if has_target_hole {
+                            break;
+                        }
+                    }
+                    if has_target_hole {
+                        eval_score += crate::config::heuristic::TARGET_HOLE_PENALTY;
+                    }
+
+                    // 2) 複数well（3マス以上の谷が離れて2列以上）ペナルティ
+                    let mut heights = [0; BOARD_WIDTH];
+                    for col in 0..BOARD_WIDTH {
+                        let mut height = 0;
+                        for y in 0..INTERNAL_HEIGHT {
+                            if temp_board_after_clear[y][col].is_some() {
+                                height = INTERNAL_HEIGHT - y;
+                                break;
+                            }
+                        }
+                        heights[col] = height as i32;
+                    }
+
+                    let mut well_count = 0;
+                    for col in 0..BOARD_WIDTH {
+                        let left = if col == 0 { INTERNAL_HEIGHT as i32 } else { heights[col - 1] };
+                        let right = if col == BOARD_WIDTH - 1 { INTERNAL_HEIGHT as i32 } else { heights[col + 1] };
+                        let h = heights[col];
+                        let diff = std::cmp::min(left, right) - h;
+                        if diff >= 3 {
+                            well_count += 1;
+                        }
+                    }
+
+                    if well_count >= 2 {
+                        eval_score += crate::config::heuristic::MULTIPLE_WELLS_PENALTY;
+                    }
+
+                    // 3) 1マスの埋まった穴（サイズ1のhole）ペナルティ
+                    let mut isolated_holes = 0;
+                    for x in 0..BOARD_WIDTH {
+                        for y in 1..INTERNAL_HEIGHT {
+                            let is_empty = temp_board_after_clear[y][x].is_none();
+                            let has_top = temp_board_after_clear[y - 1][x].is_some();
+                            let has_bottom = y == INTERNAL_HEIGHT - 1 || temp_board_after_clear[y + 1][x].is_some();
+                            if is_empty && has_top && has_bottom {
+                                isolated_holes += 1;
+                            }
+                        }
+                    }
+                    if isolated_holes > 0 {
+                        eval_score += (isolated_holes as f32) * crate::config::heuristic::ABANDONED_HOLE_PENALTY;
+                    }
                 }
 
                 // Iミノをホールドに入れる行動に加点
@@ -377,4 +526,128 @@ pub fn simulate_future_moves(
     }
 
     results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tetris::{BlockType, BOARD_WIDTH, INTERNAL_HEIGHT};
+
+    #[test]
+    fn test_target_hole_penalty() {
+        let mut game = Game::new();
+        let model = AiModel::new_default();
+        
+        game.board = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
+        // 6列目 (index 5) 以外の列を高さ2で埋める
+        for y in (INTERNAL_HEIGHT - 2)..INTERNAL_HEIGHT {
+            for x in 0..BOARD_WIDTH {
+                if x != 5 {
+                    game.board[y][x] = Some(BlockType::I);
+                }
+            }
+        }
+        
+        game.current_piece = Piece::new(BlockType::O);
+        
+        let moves = enumerate_all_moves_base(&game, &model, None, 0);
+        
+        // x = 4 に置くと、セルは index 4 と 5 をカバーし、index 5 の下が空きになるため hole ペナルティが発生する
+        let move_seal = moves.iter().find(|m| m.x == 4 && !m.use_hold);
+        // x = 0 に置くと、セルは index 0 と 1 をカバーし、ターゲット列の index 5 には影響しないため安全
+        let move_safe = moves.iter().find(|m| m.x == 0 && !m.use_hold);
+        
+        if let (Some(m_seal), Some(m_safe)) = (move_seal, move_safe) {
+            assert!(m_safe.eval_score - m_seal.eval_score > 100.0);
+        } else {
+            panic!("Could not find target moves for target hole test");
+        }
+    }
+
+    #[test]
+    fn test_multiple_wells_penalty() {
+        let mut game = Game::new();
+        let model = AiModel::new_default();
+        
+        game.board = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
+        for y in (INTERNAL_HEIGHT - 4)..INTERNAL_HEIGHT {
+            game.board[y][0] = Some(BlockType::I);
+            game.board[y][2] = Some(BlockType::I);
+            game.board[y][3] = Some(BlockType::I);
+            game.board[y][4] = Some(BlockType::I);
+            game.board[y][5] = Some(BlockType::I);
+            game.board[y][6] = Some(BlockType::I);
+            game.board[y][7] = Some(BlockType::I);
+            game.board[y][8] = Some(BlockType::I);
+        }
+        
+        game.current_piece = Piece::new(BlockType::O);
+        
+        let moves = enumerate_all_moves_base(&game, &model, None, 0);
+        
+        let move_fill = moves.iter().find(|m| m.x == 0 && !m.use_hold); // wellを埋める手
+        let move_no_fill = moves.iter().find(|m| m.x == 3 && !m.use_hold); // wellを埋めない手
+        
+        if let (Some(m_fill), Some(m_no_fill)) = (move_fill, move_no_fill) {
+            assert!(m_fill.eval_score - m_no_fill.eval_score > 50.0);
+        } else {
+            panic!("Could not find target moves for multiple wells test");
+        }
+    }
+
+    #[test]
+    fn test_abandoned_hole_penalty() {
+        let mut game = Game::new();
+        let model = AiModel::new_default();
+        
+        game.board = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
+        game.board[INTERNAL_HEIGHT - 3][0] = Some(BlockType::I);
+        game.board[INTERNAL_HEIGHT - 1][0] = Some(BlockType::I);
+        
+        game.current_piece = Piece::new(BlockType::O);
+        
+        let moves = enumerate_all_moves_base(&game, &model, None, 0);
+        let move_leave = moves.iter().find(|m| m.x == 1 && !m.use_hold);
+        
+        let mut clean_game = Game::new();
+        clean_game.current_piece = Piece::new(BlockType::O);
+        let clean_moves = enumerate_all_moves_base(&clean_game, &model, None, 0);
+        let move_clean = clean_moves.iter().find(|m| m.x == 1 && !m.use_hold);
+        
+        if let (Some(m_leave), Some(m_clean)) = (move_leave, move_clean) {
+            let diff = m_clean.eval_score - m_leave.eval_score;
+            assert!(diff > 30.0);
+        } else {
+            panic!("Could not find target moves for abandoned hole test");
+        }
+    }
+
+    #[test]
+    fn test_lookahead_next_influence() {
+        let mut game = Game::new();
+        let model = AiModel::new_default();
+        
+        game.board = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
+        for y in (INTERNAL_HEIGHT - 4)..INTERNAL_HEIGHT {
+            for x in 0..BOARD_WIDTH {
+                if x != 5 {
+                    game.board[y][x] = Some(BlockType::I);
+                }
+            }
+        }
+        
+        game.current_piece = Piece::new(BlockType::O);
+        game.bag.queue = vec![BlockType::I, BlockType::T, BlockType::T, BlockType::T, BlockType::T];
+        
+        let moves = enumerate_all_moves(&game, &model, None, 0);
+        
+        let move_safe = moves.iter().find(|m| m.x == 0 && !m.use_hold);
+        let move_seal = moves.iter().find(|m| m.x == 4 && !m.use_hold);
+        
+        if let (Some(m_safe), Some(m_seal)) = (move_safe, move_seal) {
+            assert!(m_safe.eval_score - m_seal.eval_score > 100.0);
+        } else {
+            panic!("Could not find target moves for lookahead test");
+        }
+    }
 }
