@@ -165,16 +165,18 @@ pub fn optimize_tspin_weights(iterations: usize) -> TSpinOptimizationResult {
     // 初期状態の VRAM チェックポイント保存
     save_vram_checkpoint(0, &current_model.weights, initial_fitness, init_tsd, init_tst, init_tss, init_lines);
 
+    let gpu = crate::gpu::get_gpu_evaluator();
     let hip = crate::hip::get_hip_evaluator();
     let (free_b, total_b) = hip.get_vram_usage().unwrap_or((0, 0));
     println!("初期状態 (Iteration 0):");
     println!("  Fitness: {:.1} | 平均 TSD: {:.2}回 | TST: {:.2}回 | TSS: {:.2}回 | 消去ライン: {:.1}行",
         initial_fitness, init_tsd, init_tst, init_tss, init_lines);
+    println!("  [GPU Compute] Vulkan (wgpu): {}", gpu.get_info_string());
     if hip.is_available {
-        println!("  [VRAM Info] Free: {:.2} GB / Total: {:.2} GB (ROCm 7.1 HIP / gfx1200)",
+        println!("  [VRAM Info  ] Free: {:.2} GB / Total: {:.2} GB (VRAM Synchronized)",
             free_b as f64 / 1e9, total_b as f64 / 1e9);
     }
-    println!("  [VRAM Dump] -> checkpoints/vram_model_iter_000.json 保存完了\n");
+    println!("  [VRAM Dump  ] -> checkpoints/vram_model_iter_000.json 保存完了\n");
 
     let mut best_weights = current_model.weights.clone();
     let mut best_fitness = initial_fitness;

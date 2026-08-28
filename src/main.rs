@@ -9,6 +9,7 @@ mod gpu;
 mod hip;
 mod benchmark;
 mod tuning;
+pub mod tspin_recorder;
 
 use std::fs::{self, File};
 use std::io::{stdout, Write};
@@ -363,6 +364,8 @@ fn run_ai_mode(
     let mut game = Game::new();
     let mut opening_turn: usize = 0;  // オープニングシーケンスの現在の手番
     let mut future_pieces = ai::simulate_future_moves(&game, &custom_model, opening, opening_turn);
+    let mut tspin_recorder = tspin_recorder::TSpinRecorder::new();
+    let mut turn_count = 0;
     ui::draw_game(&game, &custom_model, &future_pieces, &format!("AI Auto Play [{}]", search_config.name), None)?;
 
     let step_delay = Duration::from_millis(100);
@@ -453,8 +456,16 @@ fn run_ai_mode(
             std::thread::sleep(Duration::from_millis(30));
         }
 
+        let prev_lines = game.lines_cleared;
+        let placed_piece = game.current_piece.clone();
+
         // ハードドロップして固定
         game.hard_drop();
+
+        turn_count += 1;
+        let cleared = game.lines_cleared.saturating_sub(prev_lines);
+        let tspin_event = game.last_t_spin.clone();
+        tspin_recorder.record_turn(turn_count, &game, &placed_piece, cleared, tspin_event);
 
         // オープニングシーケンスが有効な間はターンを進める
         if let Some(op) = opening {
@@ -472,6 +483,8 @@ fn run_ai_mode(
         ui::draw_game(&game, &custom_model, &future_pieces, "AI Auto Play", None)?;
         std::thread::sleep(step_delay);
     }
+
+    tspin_recorder.flush_remaining();
 
     Ok(())
 }

@@ -123,6 +123,7 @@ pub fn run_single_game(
     let mut tslots_formed = 0;
     let mut total_attack_sent = 0u32;
 
+    let mut tspin_recorder = crate::tspin_recorder::TSpinRecorder::new();
     let start_time = Instant::now();
 
     while !game.game_over && piece_count < max_pieces {
@@ -153,15 +154,19 @@ pub fn run_single_game(
             game.last_action_was_rotate = true;
         }
 
+        let placed_piece = game.current_piece.clone();
         let prev_lines = game.lines_cleared;
         game.lock_piece();
         let cleared = game.lines_cleared - prev_lines;
         total_attack_sent += game.last_firepower;
 
+        let tspin_event = game.last_t_spin.clone();
+        tspin_recorder.record_turn(piece_count as usize, &game, &placed_piece, cleared, tspin_event.clone());
+
         if cleared == 4 {
             tetris_count += 1;
         }
-        if let Some(ref name) = game.last_t_spin {
+        if let Some(ref name) = tspin_event {
             tspin_count += 1;
             if name.contains("Double") {
                 tspin_double += 1;
@@ -178,6 +183,8 @@ pub fn run_single_game(
             tslots_formed += current_slots as u32;
         }
     }
+
+    tspin_recorder.flush_remaining();
 
     let elapsed = start_time.elapsed().as_secs_f64();
     let pps = if elapsed > 0.0 { piece_count as f64 / elapsed } else { 0.0 };
