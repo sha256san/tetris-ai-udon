@@ -2,6 +2,29 @@
 
 すべての変更内容は本ドキュメントに記録されます。
 
+## [0.1.2] - 2026-08-29
+
+### 追加 (Added)
+- **T-Spin特化 評価関数チューニングエンジン (`src/tuning.rs`)**:
+  - `addplan.md` および `PLAN.md` 準拠の 20特徴量非線形評価関数に対し、適応型変異進化戦略による T-Spin（TSD / TST / TSS）および T-Slot 構築力に特化した最適化ループを実装。
+  - CLI オプション `--tune-tspin` / `-t` およびメインメニュー `[3] T-spin 100-Iteration Optimization (VRAM Data Persistence)` を追加。
+- **GPU VRAM（デバイスメモリ）データ直接同期 & 永続化機能 (`src/hip.rs`, `src/hip_kernel.cpp`)**:
+  - `upload_weights_to_vram`: ホスト側の探索重みを GPU VRAM (`d_weights`) へ直接アップロード。
+  - `readback_weights_from_vram`: GPU VRAM 上の重みバッファから直接リードバックして整合性を保証。
+  - `get_vram_usage`: `hipMemGetInfo` を用いたリアルタイムな VRAM 使用量監視（Free / Total）。
+  - `checkpoints/vram_model_iter_*.json` および `vram_weights_checkpoint.json` へ VRAM スナップショットを逐次出力・永続化。
+- **詳細 T-Spin カテゴリ別（TSS / TSD / TST / Mini / 総計 / T-Slot形成）ベンチマーク (`src/benchmark.rs`, `md_dir/TSPIN_OPTIMIZATION.md`)**:
+  - 探索アルゴリズムごとの T-Spin 種類別実戦発火回数、T-Slot 形成回数、Tetris 消去数を正確に計測・集計する分析表を追加。
+
+### 変更 (Changed)
+- `src/tetris.rs`:
+  - `count_t_slots`: 全列（壁際・床際含む）の T-Slot 検出に対応し、実ブロックコーナー判定を厳格化。
+  - `evaluate_t_spin_terrain`: T-Slot 完成形だけでなく、屋根候補付き窪みや基礎地形を正当に加点。
+- `src/ai.rs`:
+  - `extract_20_features`: 候補手直接の 3 コーナー判定による T-Spin 発火スコア算出、T-Slot 屋根のオーバーハング減点免除、T ミノ保持時のシナジー加点を追加。
+  - `new_20_feature_default`: 100回最適化済みの高性能重みセット（$w_0=+88.07, w_1=+61.85$ 等）をデフォルトに反映。
+- `src/main.rs`: 100回最適化、VRAM 同期表示、T-Spin 詳細内訳表の生成に対応。
+
 ---
 
 ## [0.1.1] - 2026-08-28

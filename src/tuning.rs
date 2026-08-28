@@ -157,7 +157,7 @@ pub fn optimize_tspin_weights(iterations: usize) -> TSpinOptimizationResult {
     let eval_seeds = vec![42, 100, 777, 2026, 9999];
     let max_pieces_per_game = 150;
 
-    let mut current_model = AiModel::new_20_feature_default();
+    let current_model = AiModel::new_20_feature_default();
 
     let (initial_fitness, init_tsd, init_tst, init_tss, init_lines) =
         evaluate_tspin_fitness(&current_model, &eval_seeds, max_pieces_per_game);
