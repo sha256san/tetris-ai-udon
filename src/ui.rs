@@ -7,7 +7,7 @@ use crate::tetris::{Game, Piece, BlockType, BOARD_WIDTH, BOARD_HEIGHT, INTERNAL_
 use crate::ai::AiModel;
 
 pub const UI_X_OFFSET: u16 = 15;
-pub const UI_Y_OFFSET: u16 = 2;
+pub const UI_Y_OFFSET: u16 = 3;
 
 fn get_block_color(bt: BlockType) -> Color {
     match bt {
@@ -62,11 +62,15 @@ pub fn draw_game(
     let mut out = stdout();
 
     // 1. タイトルとモード表示
+    let gpu_info = crate::gpu::get_gpu_evaluator().get_info_string();
     queue!(
         out,
-        cursor::MoveTo(UI_X_OFFSET, UI_Y_OFFSET - 2),
+        cursor::MoveTo(UI_X_OFFSET, UI_Y_OFFSET - 3),
         SetForegroundColor(Color::Cyan),
         Print("=== ANTIGRAVITY TETRIS AI ==="),
+        cursor::MoveTo(UI_X_OFFSET, UI_Y_OFFSET - 2),
+        SetForegroundColor(Color::Green),
+        Print(format!("[Compute] {}", gpu_info)),
         cursor::MoveTo(UI_X_OFFSET, UI_Y_OFFSET - 1),
         SetForegroundColor(Color::White),
         Print(format!("Mode: {}  |  Score: {}  |  Lines: {}", mode_name, game.score, game.lines_cleared)),

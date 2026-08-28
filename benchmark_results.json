@@ -1,0 +1,122 @@
+[
+  {
+    "config": {
+      "name": "6. Base 1-Ply (No Lookahead) [ROCm HIP]",
+      "depth": 1,
+      "beam_width": 1,
+      "description": "単手評価のみ（先読みなしのベースライン）",
+      "backend": "Rocm"
+    },
+    "games_played": 5,
+    "avg_lines": 61.8,
+    "max_lines": 133,
+    "avg_score": 9974.4,
+    "max_score": 36838,
+    "avg_pieces": 200.2,
+    "avg_tetris_count": 2.6,
+    "avg_tspin_count": 0.0,
+    "avg_pps": 2218.700664787604,
+    "avg_search_ms": 0.4500319302834185,
+    "overall_score": 4509.498406387789
+  },
+  {
+    "config": {
+      "name": "3. Beam Search (Depth 3, Width 50) [CPU Multi-thread]",
+      "depth": 3,
+      "beam_width": 50,
+      "description": "3手先読み・ビーム幅50 (CPUマルチスレッド演算)",
+      "backend": "Cpu"
+    },
+    "games_played": 5,
+    "avg_lines": 47.2,
+    "max_lines": 77,
+    "avg_score": 44925.4,
+    "max_score": 106595,
+    "avg_pieces": 159.2,
+    "avg_tetris_count": 6.2,
+    "avg_tspin_count": 0.0,
+    "avg_pps": 66.84931074654878,
+    "avg_search_ms": 15.04549094161339,
+    "overall_score": 158.2397672526444
+  },
+  {
+    "config": {
+      "name": "5. Beam Search (Depth 5, Width 30) [Vulkan wgpu]",
+      "depth": 5,
+      "beam_width": 30,
+      "description": "5手先読み・ビーム幅30 (Vulkan / RADV Compute Shader)",
+      "backend": "Vulkan"
+    },
+    "games_played": 5,
+    "avg_lines": 154.4,
+    "max_lines": 156,
+    "avg_score": 116531.8,
+    "max_score": 178830,
+    "avg_pieces": 400.0,
+    "avg_tetris_count": 27.8,
+    "avg_tspin_count": 0.0,
+    "avg_pps": 19.395687545373463,
+    "avg_search_ms": 51.5568763255,
+    "overall_score": 116.88980035040701
+  },
+  {
+    "config": {
+      "name": "4. Beam Search (Depth 5, Width 30) [ROCm HIP]",
+      "depth": 5,
+      "beam_width": 30,
+      "description": "5手先読み・ビーム幅30 (AMD ROCm 7.1 Native HIP Compute)",
+      "backend": "Rocm"
+    },
+    "games_played": 5,
+    "avg_lines": 154.4,
+    "max_lines": 156,
+    "avg_score": 116531.8,
+    "max_score": 178830,
+    "avg_pieces": 400.0,
+    "avg_tetris_count": 27.8,
+    "avg_tspin_count": 0.0,
+    "avg_pps": 14.467197251939632,
+    "avg_search_ms": 69.129400181,
+    "overall_score": 106.80444226761975
+  },
+  {
+    "config": {
+      "name": "2. Beam Search (Depth 3, Width 50) [Vulkan wgpu]",
+      "depth": 3,
+      "beam_width": 50,
+      "description": "3手先読み・ビーム幅50 (Vulkan / RADV Compute Shader)",
+      "backend": "Vulkan"
+    },
+    "games_played": 5,
+    "avg_lines": 128.8,
+    "max_lines": 157,
+    "avg_score": 88006.2,
+    "max_score": 119297,
+    "avg_pieces": 340.4,
+    "avg_tetris_count": 17.6,
+    "avg_tspin_count": 0.0,
+    "avg_pps": 20.516361542735464,
+    "avg_search_ms": 48.74184773736274,
+    "overall_score": 106.22547103807638
+  },
+  {
+    "config": {
+      "name": "1. Beam Search (Depth 3, Width 50) [ROCm HIP]",
+      "depth": 3,
+      "beam_width": 50,
+      "description": "3手先読み・ビーム幅50 (AMD ROCm 7.1 Native HIP Compute)",
+      "backend": "Rocm"
+    },
+    "games_played": 5,
+    "avg_lines": 128.8,
+    "max_lines": 157,
+    "avg_score": 88006.2,
+    "max_score": 119297,
+    "avg_pieces": 340.4,
+    "avg_tetris_count": 17.6,
+    "avg_tspin_count": 0.0,
+    "avg_pps": 15.315611131200356,
+    "avg_search_ms": 65.2933746715294,
+    "overall_score": 95.62301278011229
+  }
+]

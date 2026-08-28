@@ -16,6 +16,7 @@ pub struct BattleState {
     pub p1_wins: u32,
     pub p2: Game,
     pub p2_wins: u32,
+    pub gpu_info: String,
 }
 
 pub async fn start_server() {
@@ -26,19 +27,22 @@ pub async fn start_server() {
         }
     }
 
+    let gpu_info = crate::gpu::get_gpu_evaluator().get_info_string();
+
     let shared_state = Arc::new(Mutex::new(BattleState {
         p1: Game::new(),
         p1_wins: 0,
         p2: Game::new(),
         p2_wins: 0,
+        gpu_info,
     }));
 
     let state_for_bg = shared_state.clone();
     
     // Background simulation loop
     tokio::spawn(async move {
-        // AIが速すぎると見えにくいので、1秒間に約3手 (300ms)
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(300));
+        // AI自動プレイのミノ設置間隔 (100ms)
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
         let mut game_over_pause = 0;
 
         loop {
@@ -111,6 +115,7 @@ pub async fn start_server() {
 
     println!("\n===========================================");
     println!("AI Battle Web Server running!");
+    println!("Compute Engine: {}", crate::gpu::get_gpu_evaluator().get_info_string());
     println!("Please open: http://localhost:3000/battle/");
     println!("Press CTRL+C to exit.");
     println!("===========================================\n");

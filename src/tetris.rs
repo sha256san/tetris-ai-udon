@@ -105,6 +105,7 @@ pub fn get_piece_offsets(block_type: BlockType, rotation: usize) -> [(i32, i32);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum RotationDirection {
     Clockwise,        // 右回転
     CounterClockwise, // 左回転
@@ -241,7 +242,7 @@ impl Game {
     }
 
     // SRSのキックオフセットテーブル (dx, dy) の取得。Y軸は下方向が正。
-    fn get_kick_offsets(&self, block_type: BlockType, from_rot: usize, to_rot: usize) -> [(i32, i32); 5] {
+    pub fn get_kick_offsets(&self, block_type: BlockType, from_rot: usize, to_rot: usize) -> [(i32, i32); 5] {
         let key = (from_rot, to_rot);
         if block_type == BlockType::I {
             // Iミノ用キックデータ
