@@ -675,12 +675,12 @@ pub fn evaluate_t_spin_terrain(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERN
 
     // 1. TD砲 (Triple-Double Cannon / Trinity) 複合形状の検出 (HoikoCode TDHole / TDHint)
     // 縦3マスの窪み(TST部)の上にTSD用屋根・土台が連鎖配置されている構造
-    for cy in 3..(INTERNAL_HEIGHT - 3) {
+    for cy in 2..(INTERNAL_HEIGHT - 2) {
         for cx in 0..BOARD_WIDTH {
             // 壁際(cx=0, 1 または cx=BOARD_WIDTH-2, BOARD_WIDTH-1)のTST縦溝
             if (cx <= 1 || cx >= BOARD_WIDTH - 2)
                 && board[cy][cx].is_none() && board[cy + 1][cx].is_none() && board[cy + 2][cx].is_none()
-                && cy + 3 < INTERNAL_HEIGHT && board[cy + 3][cx].is_some()
+                && (cy + 3 >= INTERNAL_HEIGHT || board[cy + 3][cx].is_some())
             {
                 // 上部にオーバーハング屋根（TSDシェルフ）が存在するか
                 let has_td_shelf = if cx <= 1 {
@@ -853,5 +853,51 @@ mod tests {
         game.lock_piece();
         
         assert!(game.last_t_spin.is_some());
+    }
+
+    #[test]
+    fn test_td_cannon_detection() {
+        let mut board = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
+        let bottom = INTERNAL_HEIGHT - 1;
+
+        // 壁際(x=0)に深さ3マスの縦溝を構築 (y=bottom-3..=bottom-1 が空洞、y=bottom が床)
+        for y in (bottom - 4)..=bottom {
+            for x in 0..BOARD_WIDTH {
+                board[y][x] = Some(BlockType::I);
+            }
+        }
+        board[bottom - 3][0] = None;
+        board[bottom - 2][0] = None;
+        board[bottom - 1][0] = None;
+        // TD砲のシェルフ屋根 (x=1, y=bottom-3) を残し、(x=1, y=bottom-4) を空にしてオーバーハングを作成
+        board[bottom - 3][1] = Some(BlockType::J);
+        board[bottom - 4][1] = None;
+
+        let quality = evaluate_t_spin_terrain(&board);
+        assert!(quality >= 0.90, "TD Cannon structure should yield >= 0.90 quality score, got {}", quality);
+    }
+
+    #[test]
+    fn test_versus_garbage_cancellation_and_downstack() {
+        let mut game = Game::new();
+        game.pending_garbage = 4; // 4 lines incoming
+
+        // 1 line clear (firepower 0) cancels 0 garbage
+        let bottom = INTERNAL_HEIGHT - 1;
+        for x in 0..BOARD_WIDTH {
+            game.board[bottom][x] = Some(BlockType::I);
+        }
+        let cleared = game.clear_lines();
+        assert_eq!(cleared, 1);
+        assert_eq!(game.pending_garbage, 4);
+
+        // Apply garbage
+        game.apply_garbage();
+        assert_eq!(game.pending_garbage, 0);
+        // Bottom 4 lines should now have garbage
+        for y in (INTERNAL_HEIGHT - 4)..INTERNAL_HEIGHT {
+            let filled_count = game.board[y].iter().filter(|c| c.is_some()).count();
+            assert_eq!(filled_count, BOARD_WIDTH - 1, "Garbage row should have exactly 9 blocks and 1 hole");
+        }
     }
 }

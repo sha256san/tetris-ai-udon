@@ -362,8 +362,8 @@ pub fn extract_20_features(
         future_fit = (future_fit + 0.2f32).min(1.0f32);
     }
     // WasteT: 盤面にTスロットがあるのにTミノを通常平積みに無駄消費した場合は大幅減点
-    if placed_piece.block_type == BlockType::T && t_slot_count > 0.0 && t_spin_score == 0.0 {
-        future_fit = (future_fit - 0.5f32).max(0.0f32);
+    if placed_piece.block_type == BlockType::T && (t_slot_count > 0.0 || t_spin_terrain > 0.3) && t_spin_score == 0.0 {
+        future_fit = (future_fit - 0.7f32).max(0.0f32);
     }
 
     vec![
@@ -480,28 +480,36 @@ pub fn beam_search(
         })
         .collect();
 
+    let visible_nexts = game.bag.peek_next(5).len();
+
     for turn_offset in 0..depth {
         let curr_turn = opening_turn + 1 + turn_offset;
+        // HoikoCode TrustRate: 可視ネクストキューを超える深さの探索ノードに対し信頼度を減衰 (0.90^(超過手))
+        let trust_rate = if turn_offset >= visible_nexts {
+            0.90f32.powi((turn_offset + 1 - visible_nexts) as i32)
+        } else {
+            1.0f32
+        };
 
         for branch in branches.iter_mut() {
             if branch.is_game_over {
                 continue;
             }
             if branch.game.game_over {
-                branch.accumulated_score += crate::config::rl::GAME_OVER_PENALTY * branch.current_discount;
+                branch.accumulated_score += crate::config::rl::GAME_OVER_PENALTY * branch.current_discount * trust_rate;
                 branch.is_game_over = true;
                 continue;
             }
 
             let branch_moves = enumerate_all_moves_base(&branch.game, model, opening, curr_turn);
             if branch_moves.is_empty() {
-                branch.accumulated_score += crate::config::rl::GAME_OVER_PENALTY * branch.current_discount;
+                branch.accumulated_score += crate::config::rl::GAME_OVER_PENALTY * branch.current_discount * trust_rate;
                 branch.is_game_over = true;
                 continue;
             }
 
             let best_next = &branch_moves[0];
-            branch.accumulated_score += best_next.eval_score * branch.current_discount;
+            branch.accumulated_score += best_next.eval_score * branch.current_discount * trust_rate;
             branch.current_discount *= discount;
 
             if best_next.use_hold {
@@ -512,7 +520,7 @@ pub fn beam_search(
             branch.game.hard_drop();
 
             if branch.game.game_over {
-                branch.accumulated_score += crate::config::rl::GAME_OVER_PENALTY * branch.current_discount;
+                branch.accumulated_score += crate::config::rl::GAME_OVER_PENALTY * branch.current_discount * trust_rate;
                 branch.is_game_over = true;
             }
         }
@@ -936,5 +944,33 @@ mod tests {
         let piece = Piece::new(BlockType::T);
         let feats = extract_20_features(&game, &game.board, 0, &piece, false);
         assert_eq!(feats.len(), 20);
+    }
+
+    #[test]
+    fn test_waste_t_penalty_and_hold_t_synergy() {
+        let mut game = Game::new();
+        for x in 0..BOARD_WIDTH {
+            if x != 4 && x != 5 && x != 6 {
+                game.board[23][x] = Some(BlockType::I);
+                game.board[22][x] = Some(BlockType::I);
+            }
+        }
+        game.board[23][4] = Some(BlockType::I);
+        game.board[23][6] = Some(BlockType::I);
+        game.board[21][4] = Some(BlockType::I); // T-slot is formed
+
+        // 1. Placing T outside T-slot (WasteT)
+        let mut flat_piece = Piece::new(BlockType::T);
+        flat_piece.x = 0;
+        flat_piece.y = 20;
+        let feats_waste = extract_20_features(&game, &game.board, 0, &flat_piece, false);
+        assert!(feats_waste[19] <= 0.3, "WasteT should significantly reduce future fit score");
+
+        // 2. Holding T while T-slot exists (HoldT)
+        let mut game_with_hold_t = game.clone();
+        game_with_hold_t.hold_piece = Some(BlockType::T);
+        let j_piece = Piece::new(BlockType::J);
+        let feats_hold_t = extract_20_features(&game_with_hold_t, &game.board, 0, &j_piece, false);
+        assert!(feats_hold_t[19] >= 0.8, "HoldT should grant synergy bonus when T-slot exists");
     }
 }

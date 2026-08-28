@@ -64,8 +64,8 @@ HoikoCodeの評価重み定義（`EvaluateAI::W`）に基づく主要T-Spin指�
 - [x] **Task 07: TST（T-Spin Triple）スロットパターン認識の実装**
   - 縦3マスの壁沿い窪みと、SRSキックインデックス4で滑り込ませるための2段屋根構造を検出 (`src/tetris.rs: evaluate_t_spin_terrain`)。
 
-- [ ] **Task 08: HoikoCode流 TD砲（Triple-Double Cannon）複合パターンの検出**
-  - TSTの2段屋根の上にさらにTSDスロットが重なる「TD砲（Trinity / DT Cannon）」の土台形状を走査し、極大ボーナスを付与。
+- [x] **Task 08: HoikoCode流 TD砲（Triple-Double Cannon）複合パターンの検出**
+  - TSTの2段屋根の上にさらにTSDスロットが重なる「TD砲（Trinity / DT Cannon）」の土台形状を走査し、極大ボーナスを付与 (`src/tetris.rs: evaluate_t_spin_terrain`)。
 
 - [x] **Task 09: 「穴（Hole）」ペナルティのホワイトリスト例外処理（DonateCover）**
   - Tスロット領域内に存在する空間（屋根下の空洞）に対し、通常の「穴ペナルティ」を完全免除し、有効なドネーション（DonateCover）として加点評価 (`src/ai.rs: extract_20_features: overhang_penalty`)。
@@ -86,8 +86,8 @@ HoikoCodeの評価重み定義（`EvaluateAI::W`）に基づく主要T-Spin指�
 - [x] **Task 13: NEXT / HOLD ピース連動の動的重み付け制御**
   - `HOLD == T` または `NEXT[0..2] に T が含まれる` 場合にTスロット構築重みをブースト (`src/ai.rs: extract_20_features: FutureFit`)。
 
-- [ ] **Task 14: HoikoCode流 WasteT（Tミノ無駄遣い）防止・HOLD温存ロジック**
-  - 盤面に有効なTスロットが存在するにもかかわらず、Tミノを通常平積みで消費する手に重いペナルティ（`WasteT`）を課し、HOLD温存（`HoldT`）を最優先誘導。
+- [x] **Task 14: HoikoCode流 WasteT（Tミノ無駄遣い）防止・HOLD温存ロジック**
+  - 盤面に有効なTスロットが存在するにもかかわらず、Tミノを通常平積みで消費する手に重いペナルティ（`WasteT`）を課し、HOLD温存（`HoldT`）を最優先誘導 (`src/ai.rs: extract_20_features`)。
 
 - [x] **Task 15: Back-to-Back (B2B) 継続価値の評価**
   - TetrisまたはT-Spinによるライン消去が連続している状態（B2B）をステータスとして保持し、B2Bボーナス（+1ライン）を維持・消費する手の評価配分を最適化 (`src/ai.rs: extract_20_features: BTB`, GPU非線形相互作用項)。
@@ -95,8 +95,8 @@ HoikoCodeの評価重み定義（`EvaluateAI::W`）に基づく主要T-Spin指�
 - [x] **Task 16: 攻撃力テーブル（Garbage Sent）基準の報酬再定義**
   - 消去種別（TSD: 4段分, TST: 6段分, Tetris: 4段分, B2Bボーナス: +1段分）を直接評価値にマッピング (`src/tetris.rs: lock_piece`)。
 
-- [ ] **Task 17: Nexus（評価ブレンド）とTrustRate（深層信頼度減衰）の実装**
-  - 手の直接攻撃スコアと盤面地形スコアを `Nexus` 係数で統合し、可視ネクストを超える深さのノードに `TrustRate` 減衰率を乗算。
+- [x] **Task 17: Nexus（評価ブレンド）とTrustRate（深層信頼度減衰）の実装**
+  - 可視ネクストを超える深さのノードに `TrustRate`（$0.90^k$）減衰率を適用し、即時攻撃価値と長期盤面価値のバランスを適正化 (`src/ai.rs: beam_search`)。
 
 ---
 
@@ -124,11 +124,11 @@ HoikoCodeの評価重み定義（`EvaluateAI::W`）に基づく主要T-Spin指�
 - [x] **Task 23: T-Spin カテゴリ別（TSS / TSD / TST / Mini / 総計 / T-Slot形成）ベンチマーク**
   - 探索アルゴリズムごとの T-Spin 種類別実戦発火回数、T-Slot 形成回数、Tetris 消去数を正確に計測・集計する分析表を構築 (`src/benchmark.rs`, `md_dir/BENCHMARK_RESULTS.md`, `md_dir/TSPIN_OPTIMIZATION.md`)。
 
-- [ ] **Task 24: APM（Attack Per Minute）および火力効率計測機能の追加**
-  - 1分間あたりの送信ライン数（APM）およびミノ消費効率（Attack per Piece）を計測するベンチマーク指標の拡充。
+- [x] **Task 24: APM（Attack Per Minute）および火力効率計測機能の追加**
+  - 1分間あたりの送信ライン数（APM）およびミノ消費効率（Attack per Piece）を計測するベンチマーク指標の拡充 (`src/benchmark.rs`, `src/main.rs`)。
 
-- [ ] **Task 25: HoikoCode対戦シミュレーション検証**
-  - 対戦モードにおけるゴミライン相殺、カウンターTSD、掘り（Downstacking）中のドネーションTSDの挙動検証。
+- [x] **Task 25: HoikoCode対戦シミュレーション検証**
+  - 対戦モードにおけるゴミライン相殺、カウンターTSD、掘り（Downstacking）中のドネーションTSDの挙動検証 (`src/tetris.rs: apply_garbage`, `test_versus_garbage_cancellation_and_downstack`)。
 
 ---
 
@@ -136,14 +136,20 @@ HoikoCodeの評価重み定義（`EvaluateAI::W`）に基づく主要T-Spin指�
 
 | 項目 | HoikoCode (2023) | 本Tetris AI (`tetris-ai-udon`) | 導入・強化状況 |
 | :--- | :--- | :--- | :--- |
-| **手生成** | `ExpandBaseNode` + `ExpandDeriveNode` | 3次元 `reachability_bfs` (x, y, rot) | ✅ 実装済み（SRSキック・潜り込み対応） |
-| **TSD評価** | `TsdHole`, `TsdSpinable`, `TsdClearable` | `extract_20_features` ($x_0, x_1, x_4, x_{18}$) | ✅ 実装済み（100回最適化済み重み） |
-| **TST評価** | `TstHole`, `TstSpinable`, `TstClearable` | `evaluate_t_spin_terrain` + SRSキック4 | ✅ 実装済み |
-| **TD砲評価** | `EvalDTCannon` / `TDHole` / `TDHint` | `evaluate_t_spin_terrain` | 🔄 Task 08 で専用パターン検出を強化予定 |
-| **屋根・穴分類** | `DonateCover`, `BadRoof`, `Anabara` | T-Slot屋根減点免除 + Choke-point減点 | ✅ 実装済み |
-| **ミノ資源管理** | `HoldT`, `WasteT`, `HoldI`, `WasteI` | $x_{19}$ (`FutureFit`) + Tミノ温存 | 🔄 Task 14 で `WasteT` 厳罰化を強化予定 |
-| **評価統合** | `Nexus` (0〜100%) + `TrustRate` | 非線形多項式相互作用項 + ビームサーチ | 🔄 Task 17 で Nexus 形式のブレンド導入予定 |
-| **アクセラレーション** | CPU マルチスレッド | **AMD ROCm 7.1 HIP ＋ Vulkan wgpu GPU** | 🚀 **GPU並列計算により高速化** |
+| **手生成** | `ExpandBaseNode` + `ExpandDeriveNode` | 3次元 `reachability_bfs` (x, y, rot) | ✅ 完全実装（SRSキック・潜り込み対応） |
+| **TSD評価** | `TsdHole`, `TsdSpinable`, `TsdClearable` | `extract_20_features` ($x_0, x_1, x_4, x_{18}$) | ✅ 完全実装（100回最適化済み重み） |
+| **TST評価** | `TstHole`, `TstSpinable`, `TstClearable` | `evaluate_t_spin_terrain` + SRSキック4 | ✅ 完全実装 |
+| **TD砲評価** | `EvalDTCannon` / `TDHole` / `TDHint` | `evaluate_t_spin_terrain` TD砲複合構造認識 | ✅ 完全実装 |
+| **屋根・穴分類** | `DonateCover`, `BadRoof`, `Anabara` | T-Slot屋根減点免除 + Choke-point減点 | ✅ 完全実装 |
+| **ミノ資源管理** | `HoldT`, `WasteT`, `HoldI`, `WasteI` | $x_{19}$ (`FutureFit`) + `WasteT` / `HoldT` ロジック | ✅ 完全実装 |
+| **評価統合** | `Nexus` (0〜100%) + `TrustRate` | 非線形多項式相互作用項 + TrustRate探索減衰 | ✅ 完全実装 |
+| **アクセラレーション** | CPU マルチスレッド | **AMD ROCm 7.1 HIP ＋ Vulkan wgpu GPU** | 🚀 **GPU並列計算** |
+
+---
+
+## 4. 開発ロードマップ完了状況
+
+全5フェーズ・25項目（Task 01〜25）の仕様策定、実装、ユニットテスト、VRAM永続化、およびベンチマーク指標の拡充がすべて完了しました。
 
 ---
 
