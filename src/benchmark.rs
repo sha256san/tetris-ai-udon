@@ -24,6 +24,11 @@ pub struct GameRunResult {
     pub pieces: u32,
     pub tetris_clears: u32,
     pub tspins: u32,
+    pub t_spin_single: u32,
+    pub t_spin_double: u32,
+    pub t_spin_triple: u32,
+    pub t_spin_mini: u32,
+    pub t_slots_formed: u32,
     pub duration_sec: f64,
     pub pps: f64,
     pub avg_search_ms: f64,
@@ -40,6 +45,11 @@ pub struct BenchmarkSummary {
     pub avg_pieces: f64,
     pub avg_tetris_count: f64,
     pub avg_tspin_count: f64,
+    pub avg_tspin_single: f64,
+    pub avg_tspin_double: f64,
+    pub avg_tspin_triple: f64,
+    pub avg_tspin_mini: f64,
+    pub avg_tslots_formed: f64,
     pub avg_pps: f64,
     pub avg_search_ms: f64,
     pub overall_score: f64,
@@ -102,6 +112,12 @@ pub fn run_single_game(
         configured_model.backend = Some(b);
     }
 
+    let mut tspin_single = 0;
+    let mut tspin_double = 0;
+    let mut tspin_triple = 0;
+    let mut tspin_mini = 0;
+    let mut tslots_formed = 0;
+
     let start_time = Instant::now();
 
     while !game.game_over && piece_count < max_pieces {
@@ -128,6 +144,9 @@ pub fn run_single_game(
         game.current_piece.x = best.final_piece.x;
         game.current_piece.rotation = best.final_piece.rotation;
         game.current_piece.y = best.final_piece.y;
+        if best.final_piece.block_type == BlockType::T {
+            game.last_action_was_rotate = true;
+        }
 
         let prev_lines = game.lines_cleared;
         game.lock_piece();
@@ -136,8 +155,21 @@ pub fn run_single_game(
         if cleared == 4 {
             tetris_count += 1;
         }
-        if game.last_t_spin.is_some() {
+        if let Some(ref name) = game.last_t_spin {
             tspin_count += 1;
+            if name.contains("Double") {
+                tspin_double += 1;
+            } else if name.contains("Triple") {
+                tspin_triple += 1;
+            } else if name.contains("Single") {
+                tspin_single += 1;
+            } else {
+                tspin_mini += 1;
+            }
+        }
+        let current_slots = crate::tetris::count_t_slots(&game.board);
+        if current_slots > 0 {
+            tslots_formed += current_slots as u32;
         }
     }
 
@@ -156,6 +188,11 @@ pub fn run_single_game(
         pieces: piece_count,
         tetris_clears: tetris_count,
         tspins: tspin_count,
+        t_spin_single: tspin_single,
+        t_spin_double: tspin_double,
+        t_spin_triple: tspin_triple,
+        t_spin_mini: tspin_mini,
+        t_slots_formed: tslots_formed,
         duration_sec: elapsed,
         pps,
         avg_search_ms,
@@ -281,6 +318,11 @@ pub fn run_full_benchmark(
         let avg_pieces = results.iter().map(|r| r.pieces as f64).sum::<f64>() / n;
         let avg_tetris = results.iter().map(|r| r.tetris_clears as f64).sum::<f64>() / n;
         let avg_tspin = results.iter().map(|r| r.tspins as f64).sum::<f64>() / n;
+        let avg_tspin_single = results.iter().map(|r| r.t_spin_single as f64).sum::<f64>() / n;
+        let avg_tspin_double = results.iter().map(|r| r.t_spin_double as f64).sum::<f64>() / n;
+        let avg_tspin_triple = results.iter().map(|r| r.t_spin_triple as f64).sum::<f64>() / n;
+        let avg_tspin_mini = results.iter().map(|r| r.t_spin_mini as f64).sum::<f64>() / n;
+        let avg_tslots_formed = results.iter().map(|r| r.t_slots_formed as f64).sum::<f64>() / n;
         let avg_pps = results.iter().map(|r| r.pps).sum::<f64>() / n;
         let avg_search_ms = results.iter().map(|r| r.avg_search_ms).sum::<f64>() / n;
 
@@ -288,7 +330,7 @@ pub fn run_full_benchmark(
         let efficiency_score = if avg_search_ms > 0.0 { (avg_lines / avg_search_ms).min(500.0) } else { 0.0 };
         let overall_score = strength_score * 0.5 + avg_pps * 2.0 + efficiency_score * 0.3;
 
-        println!("完了! (Avg Lines: {:.1}, Avg PPS: {:.1}, Search: {:.2}ms)", avg_lines, avg_pps, avg_search_ms);
+        println!("完了! (Avg Lines: {:.1}, Avg T-Spin: {:.1}, Avg PPS: {:.1}, Search: {:.2}ms)", avg_lines, avg_tspin, avg_pps, avg_search_ms);
 
         summaries.push(BenchmarkSummary {
             config: config.clone(),
@@ -300,6 +342,11 @@ pub fn run_full_benchmark(
             avg_pieces,
             avg_tetris_count: avg_tetris,
             avg_tspin_count: avg_tspin,
+            avg_tspin_single,
+            avg_tspin_double,
+            avg_tspin_triple,
+            avg_tspin_mini,
+            avg_tslots_formed,
             avg_pps,
             avg_search_ms,
             overall_score,

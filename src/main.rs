@@ -1130,7 +1130,7 @@ fn run_benchmark_cli(model: &AiModel) -> std::io::Result<()> {
     // Build and save md_dir/BENCHMARK_RESULTS.md
     let mut md = String::new();
     md.push_str("# 探索アルゴリズム & GPUバックエンド ベンチマーク検証レポート\n\n");
-    md.push_str(&format!("- **実施日時**: 2026-08-28\n"));
+    md.push_str(&format!("- **実施日時**: 2026-08-29\n"));
     md.push_str(&format!("- **ROCm Compute**: {}\n", rocm_info));
     md.push_str(&format!("- **Vulkan Compute**: {}\n", gpu_info));
     md.push_str(&format!("- **共通検証シード数**: {} シード (固定シード公平比較)\n", seeds.len()));
@@ -1154,11 +1154,25 @@ fn run_benchmark_cli(model: &AiModel) -> std::io::Result<()> {
     }
 
     md.push_str("\n---\n\n");
-    md.push_str("## 2. 最適構成の分析と結論\n\n");
+    md.push_str("## 2. T-Spin 内訳詳細分析表 (T-Spin Breakdown by Category)\n\n");
+    md.push_str("| アルゴリズム構成 | T-Spin Single (TSS) | T-Spin Double (TSD) | T-Spin Triple (TST) | T-Spin Mini | T-Spin 総計 | T-Slot 形成回数 | Tetris (4列消去) |\n");
+    md.push_str("|---|---|---|---|---|---|---|---|\n");
+
+    for s in &summaries {
+        md.push_str(&format!(
+            "| **{}** | **{:.2} 回** | **{:.2} 回** | **{:.2} 回** | **{:.2} 回** | **{:.2} 回** | **{:.1} 回** | **{:.1} 回** |\n",
+            s.config.name, s.avg_tspin_single, s.avg_tspin_double, s.avg_tspin_triple, s.avg_tspin_mini, s.avg_tspin_count, s.avg_tslots_formed, s.avg_tetris_count
+        ));
+    }
+
+    md.push_str("\n---\n\n");
+    md.push_str("## 3. 最適構成の分析と結論\n\n");
     if let Some(best) = summaries.first() {
         md.push_str(&format!("### ★ 最優秀構成: **{}**\n\n", best.config.name));
         md.push_str(&format!("- **平均消去ライン数**: {:.1} ライン (最大: {} ライン)\n", best.avg_lines, best.max_lines));
         md.push_str(&format!("- **平均スコア**: {:.0} 点\n", best.avg_score));
+        md.push_str(&format!("- **平均 T-Spin 回数**: {:.2} 回 (TSD: {:.2}回, TST: {:.2}回, TSS: {:.2}回, Mini: {:.2}回)\n", best.avg_tspin_count, best.avg_tspin_double, best.avg_tspin_triple, best.avg_tspin_single, best.avg_tspin_mini));
+        md.push_str(&format!("- **平均 T-Slot 構築回数**: {:.1} 回\n", best.avg_tslots_formed));
         md.push_str(&format!("- **1手あたり探索時間**: {:.2} ms ({:.1} PPS)\n", best.avg_search_ms, best.avg_pps));
         md.push_str(&format!("- **詳細説明**: {}\n\n", best.config.description));
     }
