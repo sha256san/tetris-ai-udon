@@ -28,30 +28,30 @@ impl AiModel {
         }
     }
 
-    /// addplan.md に準拠した20特徴量のハイブリッド非線形評価モデル
+    /// addplan.md に準拠した20特徴量のハイブリッド非線形評価モデル（1000回最適化チューニング済み）
     pub fn new_20_feature_default() -> Self {
         AiModel {
             weights: vec![
-                40.0,   // x0: TSpin (Single/Double/Triple/Mini)
-                30.0,   // x1: TSpinTerrain (TSlot, Corner, Rotation)
-                -35.0,  // x2: HolePenalty (Holes, Depth, Buried)
-                -20.0,  // x3: HoleSpreadPenalty (Variance, Manhattan)
-                15.0,   // x4: PlacementQuality (Mobility, Height/Bump delta)
-                120.0,  // x5: Tetris (4-line clears)
-                -15.0,  // x6: PureSinglePenalty (Single without REN/T-spin)
-                -10.0,  // x7: PureDoublePenalty (Double without REN/T-spin)
-                -5.0,   // x8: PureTriplePenalty (Triple without REN/T-spin)
-                25.0,   // x9: REN (Combo chaining)
-                30.0,   // x10: BTB (Back-to-Back status)
-                15.0,   // x11: MaxCombo
-                10.0,   // x12: MeanCombo
-                150.0,  // x13: Perfect Clear (PC)
-                -20.0,  // x14: HeightPenalty (Aggregate height)
-                -25.0,  // x15: MaxHeightPenalty (Max column height)
-                -15.0,  // x16: BumpinessPenalty (Height differences)
-                35.0,   // x17: WellQuality (Gaussian well depth bonus)
-                -25.0,  // x18: OverhangPenalty (Floating blocks)
-                20.0,   // x19: FutureFit (Next queue & Hold piece compatibility)
+                88.07,   // x0: TSpin (Single/Double/Triple/Mini) - 強力に強化
+                61.85,   // x1: TSpinTerrain (TSlot, Corner, Rotation, Overhang) - 構築強化
+                -25.93,  // x2: HolePenalty (Holes, Depth, Buried)
+                -12.13,  // x3: HoleSpreadPenalty (Variance, Manhattan)
+                22.55,   // x4: PlacementQuality (Mobility, Landing Quality)
+                89.02,   // x5: Tetris (4-line clears)
+                -19.19,  // x6: PureSinglePenalty (Single without REN/T-spin) - 無駄消し抑制
+                -17.10,  // x7: PureDoublePenalty (Double without REN/T-spin)
+                -8.01,   // x8: PureTriplePenalty (Triple without REN/T-spin)
+                18.35,   // x9: REN (Combo chaining)
+                31.47,   // x10: BTB (Back-to-Back status)
+                11.64,   // x11: MaxCombo
+                16.15,   // x12: MeanCombo
+                96.14,   // x13: Perfect Clear (PC)
+                -20.54,  // x14: HeightPenalty (Aggregate height)
+                -23.53,  // x15: MaxHeightPenalty (Max column height)
+                -6.64,   // x16: BumpinessPenalty (Height differences)
+                25.08,   // x17: WellQuality (Gaussian well depth bonus)
+                -25.35,  // x18: OverhangPenalty (Floating blocks)
+                32.86,   // x19: FutureFit (Next queue & Hold piece compatibility)
             ],
             is_nonlinear: true,
             backend: Some(GpuBackendSelection::Auto),
@@ -215,24 +215,48 @@ pub fn extract_20_features(
     let max_h = *heights.iter().max().unwrap_or(&0) as f32;
     let sum_h: i32 = heights.iter().sum();
 
-    // 1. TSpin (0.0..1.0)
-    let t_spin_score = if let Some(ref name) = game.last_t_spin {
-        if name.contains("Triple") {
-            1.0
-        } else if name.contains("Double") {
-            0.9
-        } else if name.contains("Single") {
-            0.6
-        } else {
-            0.3
+    // 1. TSpin (0.0..1.2) - 候補手の配置でT-spin条件を満たすか直接判定
+    let is_t_spin = if placed_piece.block_type == BlockType::T {
+        let cx = placed_piece.x;
+        let cy = placed_piece.y;
+        let corners = [
+            (cx - 1, cy - 1),
+            (cx + 1, cy - 1),
+            (cx - 1, cy + 1),
+            (cx + 1, cy + 1),
+        ];
+        let mut filled_corners = 0;
+        for &(x, y) in &corners {
+            if x < 0 || x >= BOARD_WIDTH as i32 || y < 0 || y >= INTERNAL_HEIGHT as i32 {
+                filled_corners += 1;
+            } else if game.board[y as usize][x as usize].is_some() {
+                filled_corners += 1;
+            }
+        }
+        filled_corners >= 3
+    } else {
+        false
+    };
+
+    let t_spin_score = if is_t_spin {
+        match cleared_lines {
+            0 => 0.4,
+            1 => 0.8, // T-Spin Single (TSS)
+            2 => 1.0, // T-Spin Double (TSD)
+            3 => 1.2, // T-Spin Triple (TST)
+            _ => 0.5,
         }
     } else {
         0.0
     };
 
-    // 2. TSpinTerrain (T-slots, corner support, depth)
+    // 2. TSpinTerrain (T-slots, corner support, depth, overhang)
     let t_slot_count = crate::tetris::count_t_slots(board_after_clear) as f32;
-    let t_spin_terrain = (t_slot_count / 3.0).min(1.0);
+    let mut t_spin_terrain = crate::tetris::evaluate_t_spin_terrain(board_after_clear);
+    let next_has_t = game.hold_piece == Some(BlockType::T) || game.bag.peek_next(4).contains(&BlockType::T);
+    if next_has_t && t_spin_terrain > 0.3 {
+        t_spin_terrain = (t_spin_terrain + 0.3).min(1.0);
+    }
 
     // 3. Holes & Hole Depth & Buried Holes
     let mut holes = 0;
@@ -316,7 +340,7 @@ pub fn extract_20_features(
     let max_well_depth = well_col_0.max(well_col_9) as f32;
     let well_quality = (-((max_well_depth - 4.0).powi(2)) / 8.0).exp();
 
-    // 19. Overhang Penalty
+    // 19. Overhang Penalty (Discount overhangs that belong to valid T-slots)
     let mut overhangs = 0;
     for x in 0..BOARD_WIDTH {
         for y in 0..(INTERNAL_HEIGHT - 1) {
@@ -325,10 +349,14 @@ pub fn extract_20_features(
             }
         }
     }
-    let overhang_penalty = (overhangs as f32 / 8.0).min(1.0);
+    let effective_overhangs = (overhangs as f32 - (t_slot_count * 1.5)).max(0.0);
+    let overhang_penalty = (effective_overhangs / 8.0).min(1.0);
 
     // 20. Future Fit (Next queue / Hold fit)
-    let future_fit = if use_hold { 0.8 } else { 0.7 };
+    let mut future_fit = if use_hold { 0.8 } else { 0.7 };
+    if next_has_t && t_spin_terrain > 0.4 {
+        future_fit = 1.0;
+    }
 
     vec![
         t_spin_score,
@@ -690,7 +718,9 @@ fn enumerate_moves_for_piece(
                 target_x,
                 rotation,
             );
-        } else {
+        }
+
+        if !is_opening_active && !use_20_features {
             // 縦3マス以上の深い穴ボーナス
             let well_bonus_score = get_well_bonus(&c.temp_board_after_clear);
             if well_bonus_score > 0 {

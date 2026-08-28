@@ -161,7 +161,9 @@ impl GpuEvaluator {
                         let x_future_fit   = features[feature_offset + 19u];
 
                         // 二次交互作用項 (Quadratic interactions)
-                        score += 25.0 * (x_tspin * x_tspin_trn);
+                        score += 75.0 * (x_tspin * x_tspin_trn);
+                        score += 50.0 * (x_tspin * x_btb);
+                        score += 35.0 * (x_tspin_trn * x_future_fit);
                         score += 30.0 * (x_tetris * x_well_quality);
                         score += 20.0 * (x_tetris * x_btb);
                         score += 15.0 * (x_placement * x_future_fit);
@@ -173,8 +175,9 @@ impl GpuEvaluator {
                         score -= 12.0 * (x_hole * x_hole);
 
                         // 三次項 (Cubic interactions)
+                        score += 90.0 * (x_tspin * x_tspin_trn * x_future_fit);
+                        score += 60.0 * (x_tspin * x_tspin_trn * x_btb);
                         score += 40.0 * (x_tetris * x_well_quality * x_btb);
-                        score += 35.0 * (x_tspin * x_tspin_trn * x_future_fit);
                         score += 20.0 * (x_ren * x_combo * x_future_fit);
                         score -= 25.0 * (x_hole * x_hole_spread * x_max_height);
 

@@ -141,6 +141,7 @@ pub fn train_rl<F>(
     }
 }
 
+#[allow(dead_code)]
 pub fn set_board_from_strings(board: &mut crate::tetris::Board, board_map: &[String]) {
     *board = [[None; crate::tetris::BOARD_WIDTH]; crate::tetris::INTERNAL_HEIGHT];
     let nrows = board_map.len();
@@ -165,6 +166,7 @@ pub fn set_board_from_strings(board: &mut crate::tetris::Board, board_map: &[Str
     }
 }
 
+#[allow(dead_code)]
 pub fn run_rl_t_spin_training_episode(
     model: &mut AiModel,
     epsilon: f32,

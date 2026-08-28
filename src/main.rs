@@ -8,6 +8,7 @@ mod server;
 mod gpu;
 mod hip;
 mod benchmark;
+mod tuning;
 
 use std::fs::{self, File};
 use std::io::{stdout, Write};
@@ -66,6 +67,16 @@ impl Default for ActiveSearchConfig {
 fn main() -> std::io::Result<()> {
     let model = load_model_or_default();
 
+    // コマンドライン引数に --tune-tspin または -t がある場合は1000回T-Spin最適化を実行
+    if std::env::args().any(|arg| arg == "--tune-tspin" || arg == "-t" || arg == "tune") {
+        let res = tuning::optimize_tspin_weights(1000);
+        let mut optimized_model = AiModel::new_20_feature_default();
+        optimized_model.weights = res.best_weights.clone();
+        save_model(&optimized_model)?;
+        println!("最適化済みモデルを {} に保存しました！", MODEL_PATH);
+        return Ok(());
+    }
+
     // コマンドライン引数に --benchmark または -b がある場合は自動ベンチマークを実行
     if std::env::args().any(|arg| arg == "--benchmark" || arg == "-b" || arg == "benchmark") {
         return run_benchmark_cli(&model);
@@ -83,7 +94,16 @@ fn main() -> std::io::Result<()> {
         match selection {
             1 => run_ai_mode(&model, active_opening.as_ref(), &active_search_config)?,
             2 => run_rl_mode(&mut model)?,
-            3 => run_rl_t_spin_training_mode(&mut model)?,
+            3 => {
+                let _ = ui::restore_terminal();
+                let res = tuning::optimize_tspin_weights(1000);
+                model.weights = res.best_weights;
+                save_model(&model)?;
+                println!("\nPress [Enter] to return to Tetris AI menu...");
+                let mut input = String::new();
+                let _ = std::io::stdin().read_line(&mut input);
+                let _ = ui::init_terminal();
+            },
             4 => run_load_template_mode(&mut model, &mut active_opening)?,
             5 => run_opening_editor()?,
             6 => {
@@ -152,7 +172,7 @@ fn show_menu(
         Print("[2] Reinforcement Learning (Self-Play TD)"),
         cursor::MoveTo(menu_x + 2, menu_y + 9),
         SetForegroundColor(Color::Rgb { r: 255, g: 120, b: 120 }),
-        Print("[3] T-spin RL (TSD Training)"),
+        Print("[3] T-spin 1000-Iteration Optimization (TSD/TST Focus)"),
         cursor::MoveTo(menu_x + 2, menu_y + 10),
         SetForegroundColor(Color::Rgb { r: 255, g: 165, b: 0 }),
         Print("[4] Load / Set Template or Opening"),
@@ -539,12 +559,14 @@ fn run_rl_mode(model: &mut AiModel) -> std::io::Result<()> {
 }
 
 #[derive(serde::Deserialize, Clone)]
+#[allow(dead_code)]
 struct TsdTrainingBranch {
     board_map: Option<Vec<String>>,
     board_maps: Option<Vec<Vec<String>>>,
 }
 
 #[derive(serde::Deserialize, Clone)]
+#[allow(dead_code)]
 struct TsdTrainingTemplate {
     board_map: Option<Vec<String>>,
     board_maps: Option<Vec<Vec<String>>>,
@@ -553,12 +575,14 @@ struct TsdTrainingTemplate {
     training_next_pieces: Option<Vec<String>>,
 }
 
+#[allow(dead_code)]
 struct TrainingSetup {
     map: Vec<String>,
     next_pieces: Vec<tetris::BlockType>,
 }
 
 // 4.5. T-spin強化学習トレーニングモード
+#[allow(dead_code)]
 fn run_rl_t_spin_training_mode(model: &mut AiModel) -> std::io::Result<()> {
     use rand::Rng;
     execute!(stdout(), terminal::Clear(terminal::ClearType::All))?;

@@ -183,6 +183,35 @@ impl Game {
         }
     }
 
+    pub fn new_with_seed(seed: u64) -> Self {
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut bag = Bag { queue: Vec::new() };
+        for _ in 0..30 {
+            let mut new_bag = BlockType::all().to_vec();
+            new_bag.shuffle(&mut rng);
+            bag.queue.extend(new_bag);
+        }
+        let first = bag.pop();
+        Game {
+            board: [[None; BOARD_WIDTH]; INTERNAL_HEIGHT],
+            current_piece: Piece::new(first),
+            bag,
+            hold_piece: None,
+            hold_locked: false,
+            score: 0,
+            lines_cleared: 0,
+            game_over: false,
+            last_action_was_rotate: false,
+            last_t_spin: None,
+            btb: false,
+            pending_garbage: 0,
+            last_firepower: 0,
+            last_garbage_hole: None,
+        }
+    }
+
     // 指定されたミノが衝突なく配置可能かチェック
     pub fn is_valid_position(&self, piece: &Piece) -> bool {
         for &(cx, cy) in &piece.get_cells() {
@@ -553,11 +582,11 @@ pub fn get_well_bonus(board: &Board) -> u32 {
     }
 }
 
-/// 盤面上の T-spin slot (T-slot) の個数をカウントする
+/// 盤面上の T-spin slot (T-slot) の個数をカウントする（壁際・全列対応）
 pub fn count_t_slots(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERNAL_HEIGHT]) -> usize {
     let mut count = 0;
     for cy in 1..(INTERNAL_HEIGHT - 1) {
-        for cx in 1..(BOARD_WIDTH - 1) {
+        for cx in 0..BOARD_WIDTH {
             // 中心セルが空であること
             if board[cy][cx].is_some() {
                 continue;
@@ -571,20 +600,22 @@ pub fn count_t_slots(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERNAL_HEIGHT]
                 (cx as i32 + 1, cy as i32 + 1),
             ];
             let mut filled_corners = 0;
+            let mut real_block_corners = 0;
             for &(x, y) in &corners {
-                if x < 0 || x >= BOARD_WIDTH as i32 || y < 0 || y >= INTERNAL_HEIGHT as i32 {
+                if x < 0 || x >= BOARD_WIDTH as i32 || y >= INTERNAL_HEIGHT as i32 {
                     filled_corners += 1;
-                } else if board[y as usize][x as usize].is_some() {
+                } else if y >= 0 && board[y as usize][x as usize].is_some() {
                     filled_corners += 1;
+                    real_block_corners += 1;
                 }
             }
 
-            if filled_corners < 3 {
+            // 少なくとも2つは実際のブロックによるコーナー支持が必要（壁単独での空虚検出防止）
+            if filled_corners < 3 || real_block_corners < 2 {
                 continue;
             }
 
             // 4つのTの向きについて判定 (0: 上, 1: 右, 2: 下, 3: 左)
-            // それぞれの向きで、Tミノが入る3つのセルが空で、かつ反対側（Tミノの底辺中央の隣）が埋まっているかチェック
             let cx_i = cx as i32;
             let cy_i = cy as i32;
             let orientations = [
@@ -615,20 +646,51 @@ pub fn count_t_slots(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERNAL_HEIGHT]
                 }
 
                 let (bx, by) = blocked_coord;
-                let is_blocked = if bx < 0 || bx >= BOARD_WIDTH as i32 || by < 0 || by >= INTERNAL_HEIGHT as i32 {
+                let is_blocked = if bx < 0 || bx >= BOARD_WIDTH as i32 || by >= INTERNAL_HEIGHT as i32 {
                     true
+                } else if by < 0 {
+                    false
                 } else {
                     board[by as usize][bx as usize].is_some()
                 };
 
                 if is_blocked {
                     count += 1;
-                    break; // この中心セルに少なくとも1つの向きでT-slotが形成されている
+                    break;
                 }
             }
         }
     }
     count
+}
+
+/// T-spin地形品質（スロット完成度 + スロット基礎凹み + コーナー支持）を 0.0 .. 1.0 で算出
+pub fn evaluate_t_spin_terrain(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERNAL_HEIGHT]) -> f32 {
+    let slots = count_t_slots(board);
+    if slots > 0 {
+        return (0.7 + (slots as f32) * 0.15).min(1.0);
+    }
+
+    let mut potential = 0.0f32;
+    for cy in 2..(INTERNAL_HEIGHT - 1) {
+        for cx in 1..(BOARD_WIDTH - 1) {
+            if board[cy][cx].is_none() && board[cy][cx - 1].is_none() && board[cy][cx + 1].is_none() {
+                let bottom_filled = (if board[cy + 1][cx - 1].is_some() { 1 } else { 0 })
+                    + (if board[cy + 1][cx].is_some() { 1 } else { 0 })
+                    + (if board[cy + 1][cx + 1].is_some() { 1 } else { 0 });
+                if bottom_filled >= 2 {
+                    let roof_left = cy >= 1 && board[cy - 1][cx - 1].is_some();
+                    let roof_right = cy >= 1 && board[cy - 1][cx + 1].is_some();
+                    if roof_left || roof_right {
+                        potential = potential.max(0.5);
+                    } else {
+                        potential = potential.max(0.25);
+                    }
+                }
+            }
+        }
+    }
+    potential
 }
 
 #[cfg(test)]
@@ -728,14 +790,15 @@ mod tests {
 
         let cy = INTERNAL_HEIGHT - 2;
         let cx = 2;
-        // 左側を埋める (8, 0 に相当)
+        // 左側を埋める
         board[cy][cx - 1] = Some(BlockType::I);
         // コーナー3つを埋める (右上、左下、右下)
         board[cy - 1][cx + 1] = Some(BlockType::I);
         board[cy + 1][cx - 1] = Some(BlockType::I);
         board[cy + 1][cx + 1] = Some(BlockType::I);
 
-        assert_eq!(count_t_slots(&board), 1);
+        let c = count_t_slots(&board);
+        assert_eq!(c, 1, "Expected 1 slot but got {}", c);
     }
 
     #[test]

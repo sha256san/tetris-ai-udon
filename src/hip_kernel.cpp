@@ -71,7 +71,9 @@ __global__ void evaluate_nonlinear_kernel(
             float x_future_fit   = features[offset + 19];
 
             // 2. 二次交互作用項 (Quadratic interactions: aij * xi * xj - pi * xi^2)
-            score += 25.0f * (x_tspin * x_tspin_trn);
+            score += 75.0f * (x_tspin * x_tspin_trn);
+            score += 50.0f * (x_tspin * x_btb);
+            score += 35.0f * (x_tspin_trn * x_future_fit);
             score += 30.0f * (x_tetris * x_well_quality);
             score += 20.0f * (x_tetris * x_btb);
             score += 15.0f * (x_placement * x_future_fit);
@@ -85,8 +87,9 @@ __global__ void evaluate_nonlinear_kernel(
             score -= 12.0f * (x_hole * x_hole);
 
             // 3. 三次項 (Cubic interactions: bijk * xi * xj * xk)
+            score += 90.0f * (x_tspin * x_tspin_trn * x_future_fit);
+            score += 60.0f * (x_tspin * x_tspin_trn * x_btb);
             score += 40.0f * (x_tetris * x_well_quality * x_btb);
-            score += 35.0f * (x_tspin * x_tspin_trn * x_future_fit);
             score += 20.0f * (x_ren * x_combo * x_future_fit);
             score -= 25.0f * (x_hole * x_hole_spread * x_max_height);
 
