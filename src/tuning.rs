@@ -35,6 +35,7 @@ pub fn evaluate_tspin_fitness(model: &AiModel, seeds: &[u64], max_pieces: usize)
         let mut btb_count = 0;
         let mut tsd_setups = 0;
         let mut pieces = 0;
+        let mut tspin_recorder = crate::tspin_recorder::TSpinRecorder::new();
 
         while !game.game_over && pieces < max_pieces {
             let candidates = crate::ai::enumerate_all_moves_base(&game, model, None, 0);
@@ -48,13 +49,20 @@ pub fn evaluate_tspin_fitness(model: &AiModel, seeds: &[u64], max_pieces: usize)
             }
             game.current_piece.x = best.final_piece.x;
             game.current_piece.rotation = best.final_piece.rotation;
+            game.current_piece.y = best.final_piece.y;
             if best.final_piece.block_type == BlockType::T {
                 game.last_action_was_rotate = true;
             }
-            game.hard_drop();
+            let placed_piece = game.current_piece.clone();
+            let prev_lines = game.lines_cleared;
+            game.lock_piece();
             pieces += 1;
+            let cleared = game.lines_cleared - prev_lines;
 
-            if let Some(ref name) = game.last_t_spin {
+            let tspin_event = game.last_t_spin.clone();
+            tspin_recorder.record_turn(pieces as usize, &game, &placed_piece, cleared, tspin_event.clone());
+
+            if let Some(ref name) = tspin_event {
                 if name.contains("Double") {
                     tsd += 1;
                 } else if name.contains("Triple") {
@@ -71,6 +79,7 @@ pub fn evaluate_tspin_fitness(model: &AiModel, seeds: &[u64], max_pieces: usize)
                 tsd_setups += t_slots as u32;
             }
         }
+        tspin_recorder.flush_remaining();
 
         (tsd, tst, tss, game.lines_cleared, btb_count, tsd_setups)
     }).collect();
