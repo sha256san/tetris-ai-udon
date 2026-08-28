@@ -174,6 +174,23 @@ int hip_evaluator_evaluate_batch(
     return 0;
 }
 
+int hip_evaluator_upload_weights(const float* h_weights, int num_features) {
+    if (!g_hip_ctx.initialized || num_features > g_hip_ctx.max_features) return -1;
+    size_t weights_size = (size_t)num_features * sizeof(float);
+    return (hipMemcpy(g_hip_ctx.d_weights, h_weights, weights_size, hipMemcpyHostToDevice) == hipSuccess) ? 0 : -2;
+}
+
+int hip_evaluator_readback_weights(float* h_weights, int num_features) {
+    if (!g_hip_ctx.initialized || num_features > g_hip_ctx.max_features) return -1;
+    size_t weights_size = (size_t)num_features * sizeof(float);
+    return (hipMemcpy(h_weights, g_hip_ctx.d_weights, weights_size, hipMemcpyDeviceToHost) == hipSuccess) ? 0 : -2;
+}
+
+int hip_evaluator_get_vram_info(size_t* free_bytes, size_t* total_bytes) {
+    if (hipMemGetInfo(free_bytes, total_bytes) == hipSuccess) return 0;
+    return -1;
+}
+
 void hip_evaluator_cleanup() {
     if (g_hip_ctx.initialized) {
         if (g_hip_ctx.d_weights) hipFree(g_hip_ctx.d_weights);

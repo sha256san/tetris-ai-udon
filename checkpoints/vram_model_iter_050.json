@@ -1,5 +1,13 @@
 {
-  "weights": [
+  "iteration": 50,
+  "fitness": 25295.0,
+  "avg_tsd": 0.0,
+  "avg_tst": 0.0,
+  "avg_tss": 0.0,
+  "avg_lines": 13.4,
+  "vram_free_mb": 16056.0,
+  "vram_total_mb": 16304.0,
+  "weights_from_vram": [
     88.07,
     61.85,
     -25.93,
@@ -20,7 +28,5 @@
     25.08,
     -25.35,
     32.86
-  ],
-  "is_nonlinear": true,
-  "backend": "Auto"
+  ]
 }

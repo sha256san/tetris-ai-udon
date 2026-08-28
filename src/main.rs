@@ -67,9 +67,9 @@ impl Default for ActiveSearchConfig {
 fn main() -> std::io::Result<()> {
     let model = load_model_or_default();
 
-    // コマンドライン引数に --tune-tspin または -t がある場合は1000回T-Spin最適化を実行
+    // コマンドライン引数に --tune-tspin または -t がある場合は100回T-Spin最適化を実行
     if std::env::args().any(|arg| arg == "--tune-tspin" || arg == "-t" || arg == "tune") {
-        let res = tuning::optimize_tspin_weights(1000);
+        let res = tuning::optimize_tspin_weights(100);
         let mut optimized_model = AiModel::new_20_feature_default();
         optimized_model.weights = res.best_weights.clone();
         save_model(&optimized_model)?;
@@ -96,7 +96,7 @@ fn main() -> std::io::Result<()> {
             2 => run_rl_mode(&mut model)?,
             3 => {
                 let _ = ui::restore_terminal();
-                let res = tuning::optimize_tspin_weights(1000);
+                let res = tuning::optimize_tspin_weights(100);
                 model.weights = res.best_weights;
                 save_model(&model)?;
                 println!("\nPress [Enter] to return to Tetris AI menu...");
@@ -172,7 +172,7 @@ fn show_menu(
         Print("[2] Reinforcement Learning (Self-Play TD)"),
         cursor::MoveTo(menu_x + 2, menu_y + 9),
         SetForegroundColor(Color::Rgb { r: 255, g: 120, b: 120 }),
-        Print("[3] T-spin 1000-Iteration Optimization (TSD/TST Focus)"),
+        Print("[3] T-spin 100-Iteration Optimization (VRAM Data Persistence)"),
         cursor::MoveTo(menu_x + 2, menu_y + 10),
         SetForegroundColor(Color::Rgb { r: 255, g: 165, b: 0 }),
         Print("[4] Load / Set Template or Opening"),

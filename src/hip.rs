@@ -16,6 +16,9 @@ unsafe extern "C" {
         num_features: i32,
         is_nonlinear: i32,
     ) -> i32;
+    fn hip_evaluator_upload_weights(weights: *const f32, num_features: i32) -> i32;
+    fn hip_evaluator_readback_weights(weights: *mut f32, num_features: i32) -> i32;
+    fn hip_evaluator_get_vram_info(free_bytes: *mut usize, total_bytes: *mut usize) -> i32;
     #[allow(dead_code)]
     fn hip_evaluator_cleanup();
 }
@@ -43,6 +46,29 @@ pub fn get_hip_evaluator() -> &'static HipEvaluator {
 }
 
 impl HipEvaluator {
+    pub fn upload_weights_to_vram(&self, weights: &[f32]) -> bool {
+        if !self.is_available { return false; }
+        let _guard = match HIP_MUTEX.lock() { Ok(g) => g, Err(_) => return false };
+        unsafe { hip_evaluator_upload_weights(weights.as_ptr(), weights.len() as i32) == 0 }
+    }
+
+    pub fn readback_weights_from_vram(&self, num_features: usize) -> Option<Vec<f32>> {
+        if !self.is_available { return None; }
+        let mut weights = vec![0.0f32; num_features];
+        let _guard = match HIP_MUTEX.lock() { Ok(g) => g, Err(_) => return None };
+        let res = unsafe { hip_evaluator_readback_weights(weights.as_mut_ptr(), num_features as i32) };
+        if res == 0 { Some(weights) } else { None }
+    }
+
+    pub fn get_vram_usage(&self) -> Option<(usize, usize)> {
+        if !self.is_available { return None; }
+        let mut free = 0usize;
+        let mut total = 0usize;
+        let _guard = match HIP_MUTEX.lock() { Ok(g) => g, Err(_) => return None };
+        let res = unsafe { hip_evaluator_get_vram_info(&mut free, &mut total) };
+        if res == 0 { Some((free, total)) } else { None }
+    }
+
     pub fn evaluate_batch(&self, weights: &[f32], feature_batch: &[Vec<f32>], is_nonlinear: bool) -> Option<Vec<f32>> {
         if !self.is_available || feature_batch.is_empty() {
             return None;
