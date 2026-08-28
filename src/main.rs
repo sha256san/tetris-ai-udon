@@ -1154,14 +1154,14 @@ fn run_benchmark_cli(model: &AiModel) -> std::io::Result<()> {
     }
 
     md.push_str("\n---\n\n");
-    md.push_str("## 2. T-Spin 内訳詳細分析表 (T-Spin Breakdown by Category)\n\n");
-    md.push_str("| アルゴリズム構成 | T-Spin Single (TSS) | T-Spin Double (TSD) | T-Spin Triple (TST) | T-Spin Mini | T-Spin 総計 | T-Slot 形成回数 | Tetris (4列消去) |\n");
-    md.push_str("|---|---|---|---|---|---|---|---|\n");
+    md.push_str("## 2. T-Spin 内訳 & 火力 (APM) 詳細分析表\n\n");
+    md.push_str("| アルゴリズム構成 | TSS | TSD | TST | Mini | **T-Spin 総計** | T-Slot 形成 | Tetris | **APM (送信段/分)** |\n");
+    md.push_str("|---|---|---|---|---|---|---|---|---|\n");
 
     for s in &summaries {
         md.push_str(&format!(
-            "| **{}** | **{:.2} 回** | **{:.2} 回** | **{:.2} 回** | **{:.2} 回** | **{:.2} 回** | **{:.1} 回** | **{:.1} 回** |\n",
-            s.config.name, s.avg_tspin_single, s.avg_tspin_double, s.avg_tspin_triple, s.avg_tspin_mini, s.avg_tspin_count, s.avg_tslots_formed, s.avg_tetris_count
+            "| **{}** | **{:.2} 回** | **{:.2} 回** | **{:.2} 回** | **{:.2} 回** | **{:.2} 回** | **{:.1} 回** | **{:.1} 回** | **{:.1} APM** |\n",
+            s.config.name, s.avg_tspin_single, s.avg_tspin_double, s.avg_tspin_triple, s.avg_tspin_mini, s.avg_tspin_count, s.avg_tslots_formed, s.avg_tetris_count, s.avg_apm
         ));
     }
 

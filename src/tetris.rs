@@ -664,14 +664,41 @@ pub fn count_t_slots(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERNAL_HEIGHT]
     count
 }
 
-/// T-spin地形品質（スロット完成度 + スロット基礎凹み + コーナー支持）を 0.0 .. 1.0 で算出
+/// T-spin地形品質（スロット完成度 + TD砲/TST複合構造 + スロット基礎凹み + コーナー支持）を 0.0 .. 1.0 で算出
 pub fn evaluate_t_spin_terrain(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERNAL_HEIGHT]) -> f32 {
     let slots = count_t_slots(board);
+    let mut max_quality = 0.0f32;
+
     if slots > 0 {
-        return (0.7 + (slots as f32) * 0.15).min(1.0);
+        max_quality = (0.7 + (slots as f32) * 0.15).min(1.0);
     }
 
-    let mut potential = 0.0f32;
+    // 1. TD砲 (Triple-Double Cannon / Trinity) 複合形状の検出 (HoikoCode TDHole / TDHint)
+    // 縦3マスの窪み(TST部)の上にTSD用屋根・土台が連鎖配置されている構造
+    for cy in 3..(INTERNAL_HEIGHT - 3) {
+        for cx in 0..BOARD_WIDTH {
+            // 壁際(cx=0, 1 または cx=BOARD_WIDTH-2, BOARD_WIDTH-1)のTST縦溝
+            if (cx <= 1 || cx >= BOARD_WIDTH - 2)
+                && board[cy][cx].is_none() && board[cy + 1][cx].is_none() && board[cy + 2][cx].is_none()
+                && cy + 3 < INTERNAL_HEIGHT && board[cy + 3][cx].is_some()
+            {
+                // 上部にオーバーハング屋根（TSDシェルフ）が存在するか
+                let has_td_shelf = if cx <= 1 {
+                    cx + 1 < BOARD_WIDTH && board[cy][cx + 1].is_some() && board[cy - 1][cx + 1].is_none()
+                } else {
+                    cx >= 1 && board[cy][cx - 1].is_some() && board[cy - 1][cx - 1].is_none()
+                };
+
+                if has_td_shelf {
+                    max_quality = max_quality.max(0.95); // TD砲完成形に極大ボーナス
+                } else {
+                    max_quality = max_quality.max(0.75); // TST縦溝準備
+                }
+            }
+        }
+    }
+
+    // 2. TSD スロット基礎・仕込み中間地形（Stepping Stone）の走査
     for cy in 2..(INTERNAL_HEIGHT - 1) {
         for cx in 1..(BOARD_WIDTH - 1) {
             if board[cy][cx].is_none() && board[cy][cx - 1].is_none() && board[cy][cx + 1].is_none() {
@@ -682,15 +709,16 @@ pub fn evaluate_t_spin_terrain(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERN
                     let roof_left = cy >= 1 && board[cy - 1][cx - 1].is_some();
                     let roof_right = cy >= 1 && board[cy - 1][cx + 1].is_some();
                     if roof_left || roof_right {
-                        potential = potential.max(0.5);
+                        max_quality = max_quality.max(0.55);
                     } else {
-                        potential = potential.max(0.25);
+                        max_quality = max_quality.max(0.30);
                     }
                 }
             }
         }
     }
-    potential
+
+    max_quality
 }
 
 #[cfg(test)]

@@ -29,6 +29,8 @@ pub struct GameRunResult {
     pub t_spin_triple: u32,
     pub t_spin_mini: u32,
     pub t_slots_formed: u32,
+    pub attack_lines: u32,
+    pub apm: f64,
     pub duration_sec: f64,
     pub pps: f64,
     pub avg_search_ms: f64,
@@ -50,6 +52,8 @@ pub struct BenchmarkSummary {
     pub avg_tspin_triple: f64,
     pub avg_tspin_mini: f64,
     pub avg_tslots_formed: f64,
+    pub avg_attack_lines: f64,
+    pub avg_apm: f64,
     pub avg_pps: f64,
     pub avg_search_ms: f64,
     pub overall_score: f64,
@@ -117,6 +121,7 @@ pub fn run_single_game(
     let mut tspin_triple = 0;
     let mut tspin_mini = 0;
     let mut tslots_formed = 0;
+    let mut total_attack_sent = 0u32;
 
     let start_time = Instant::now();
 
@@ -151,6 +156,7 @@ pub fn run_single_game(
         let prev_lines = game.lines_cleared;
         game.lock_piece();
         let cleared = game.lines_cleared - prev_lines;
+        total_attack_sent += game.last_firepower;
 
         if cleared == 4 {
             tetris_count += 1;
@@ -175,6 +181,7 @@ pub fn run_single_game(
 
     let elapsed = start_time.elapsed().as_secs_f64();
     let pps = if elapsed > 0.0 { piece_count as f64 / elapsed } else { 0.0 };
+    let apm = if elapsed > 0.0 { (total_attack_sent as f64 / elapsed) * 60.0 } else { 0.0 };
     let avg_search_ms = if piece_count > 0 {
         (total_search_duration.as_secs_f64() * 1000.0) / piece_count as f64
     } else {
@@ -193,6 +200,8 @@ pub fn run_single_game(
         t_spin_triple: tspin_triple,
         t_spin_mini: tspin_mini,
         t_slots_formed: tslots_formed,
+        attack_lines: total_attack_sent,
+        apm,
         duration_sec: elapsed,
         pps,
         avg_search_ms,
@@ -323,6 +332,8 @@ pub fn run_full_benchmark(
         let avg_tspin_triple = results.iter().map(|r| r.t_spin_triple as f64).sum::<f64>() / n;
         let avg_tspin_mini = results.iter().map(|r| r.t_spin_mini as f64).sum::<f64>() / n;
         let avg_tslots_formed = results.iter().map(|r| r.t_slots_formed as f64).sum::<f64>() / n;
+        let avg_attack_lines = results.iter().map(|r| r.attack_lines as f64).sum::<f64>() / n;
+        let avg_apm = results.iter().map(|r| r.apm).sum::<f64>() / n;
         let avg_pps = results.iter().map(|r| r.pps).sum::<f64>() / n;
         let avg_search_ms = results.iter().map(|r| r.avg_search_ms).sum::<f64>() / n;
 
@@ -330,7 +341,7 @@ pub fn run_full_benchmark(
         let efficiency_score = if avg_search_ms > 0.0 { (avg_lines / avg_search_ms).min(500.0) } else { 0.0 };
         let overall_score = strength_score * 0.5 + avg_pps * 2.0 + efficiency_score * 0.3;
 
-        println!("完了! (Avg Lines: {:.1}, Avg T-Spin: {:.1}, Avg PPS: {:.1}, Search: {:.2}ms)", avg_lines, avg_tspin, avg_pps, avg_search_ms);
+        println!("完了! (Avg Lines: {:.1}, Avg T-Spin: {:.1}, APM: {:.1}, Avg PPS: {:.1}, Search: {:.2}ms)", avg_lines, avg_tspin, avg_apm, avg_pps, avg_search_ms);
 
         summaries.push(BenchmarkSummary {
             config: config.clone(),
@@ -347,6 +358,8 @@ pub fn run_full_benchmark(
             avg_tspin_triple,
             avg_tspin_mini,
             avg_tslots_formed,
+            avg_attack_lines,
+            avg_apm,
             avg_pps,
             avg_search_ms,
             overall_score,

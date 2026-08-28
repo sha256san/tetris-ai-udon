@@ -352,10 +352,18 @@ pub fn extract_20_features(
     let effective_overhangs = (overhangs as f32 - (t_slot_count * 1.5)).max(0.0);
     let overhang_penalty = (effective_overhangs / 8.0).min(1.0);
 
-    // 20. Future Fit (Next queue / Hold fit)
-    let mut future_fit = if use_hold { 0.8 } else { 0.7 };
+    // 20. Future Fit (Next queue / Hold fit, Hoiko-style HoldT synergy & WasteT penalty)
+    let mut future_fit = if use_hold { 0.8f32 } else { 0.7f32 };
     if next_has_t && t_spin_terrain > 0.4 {
-        future_fit = 1.0;
+        future_fit = 1.0f32;
+    }
+    // HoldT: Tミノをホールド温存している状態でTスロット構築中の場合はボーナス
+    if game.hold_piece == Some(BlockType::T) && t_spin_terrain > 0.3 {
+        future_fit = (future_fit + 0.2f32).min(1.0f32);
+    }
+    // WasteT: 盤面にTスロットがあるのにTミノを通常平積みに無駄消費した場合は大幅減点
+    if placed_piece.block_type == BlockType::T && t_slot_count > 0.0 && t_spin_score == 0.0 {
+        future_fit = (future_fit - 0.5f32).max(0.0f32);
     }
 
     vec![
