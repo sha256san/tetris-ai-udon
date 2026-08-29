@@ -2,7 +2,51 @@
 
 すべての変更内容は本ドキュメントに記録されます。
 
-## [0.1.2] - 2026-08-29
+## [0.1.4] - 2026-08-30
+
+### 追加 (Added)
+- **4体同時 10,000回反復 並列進化学習バッチシステム (`run_parallel_training_10000.sh`, `scripts/merge_best_worker.py`)**:
+  - 4つのAIワーカープロセスを完全並行（バックグラウンド）で起動し、各ワーカーが10,000イテレーションずつ探索を実行。
+  - 各ラウンド終了時に全ワーカーのFitness・TSD/TST発火回数・VRAMチェックポイントを自動比較し、最高性能の重みを `model.json` に昇格させて次ラウンドへ自動継承する永続ループを実装。
+- **実戦特化 操作高速化エンジン (`src/ai.rs`, `src/main.rs`)**:
+  - `optimize_execution_path`: 上空から直線落下可能なオープン着地点に対して、無駄なソフトドロップを完全に排除し最短の `[Rotate, Shift, HardDrop]` 直通パスを生成。
+  - スピン入れ（SRSキック）や潜り込みが必要な手についても、目標セル到達直後に末尾へ `MoveAction::HardDrop` を追加し、0.5秒の接地ロックディレイ待機時間を完全ゼロ化。
+  - `MoveAction::HardDrop` 列挙子および自動プレイ描画ループ対応。
+- **T-Spin Mini 後の BTB 継続検証 & 追跡ログ機能 (`src/tspin_recorder.rs`)**:
+  - `TSpinEventRecord` に `btb_continued_after`, `btb_evaluation`, `next_heavy_attack` を追加。
+  - Mini発火後の5手を自動走査し、BTBを維持したまま本命火力（Tetris や TSD/TST）を発火できたかを判定（`Successful Mini -> BTB Maintained` または `Wasted Mini`）。
+- **T-Spin 直前1手（Turn -1: 屋根・仕込み手）のログ強調表示 (`src/tspin_recorder.rs`)**:
+  - T-Spin発火直前の1手を視覚的な専用バナー `🔥🔥🔥 【T-SPIN SETUP MOVE: 1 TURN BEFORE TRIGGER (Turn X)】 🔥🔥🔥` で目立たせ、どのミノで屋根や土台をセットアップしたかを明確化。
+- **T-Spin Mini 無駄打ちペナルティ (`src/config.rs`, `src/ai.rs`)**:
+  - `WASTED_TSPIN_MINI_PENALTY: -30.0` を追加し、BTBに繋がらない単発Miniを評価関数側で抑制。
+- **Web対戦サーバーの動的ポートフォールバック (`src/server.rs`)**:
+  - ポート3000が使用中の場合でもパニックせず、自動的に3001〜3010へ切り替えて起動する堅牢なバインド処理を実装。
+
+### テスト (Testing)
+- 全32件の単体テスト（`cargo test`）が100%合格。
+  - `test_hard_drop_preference_and_instant_lock`
+  - `test_wasted_mini_suppression`
+  - `test_setup_turn_highlighting`
+  - `test_tspin_mini_btb_continuation_tracking`
+
+---
+
+## [0.1.3] - 2026-08-30
+
+### 追加 (Added)
+- **1,180項目 構造化テトリス知識ベース & リサーチ基盤 (`tetris-ai-research/`, `src/knowledge.rs`, `scripts/generate_tetris_research.py`)**:
+  - `addplan3.md` 準拠の全16カテゴリ・1,180件の詳細知識をJSON（`knowledge.json`, `terrain_patterns.json`）およびMarkdownリファレンス文書（`01_rules/` 〜 `12_sources/`）として完全体系化。
+  - Rustエンジン用知識管理モジュール `src/knowledge.rs` を追加し、`KnowledgeBase::load_from_default_path()` による高速検索をサポート。
+- **実戦特化 地形評価 & 物理制約エンジン (`src/tetris.rs`, `src/ai.rs`, `src/config.rs`)**:
+  - `calculate_center_convexity`: 盤面中央列（x=3..6）が高く盛り上がる富士山型地形を検知し、`CENTER_CONVEXITY_PENALTY (-40.0)` および特徴量 $x_{16}$ でペナルティ付与。
+  - `detect_dual_side_wells`: x=0 と x=9 が同時に深さ2以上の穴になる状態を検知し、`DUAL_SIDE_WELL_PENALTY (-100.0)` を付与、特徴量 $x_{17}$ を 0.05 に急落させてIミノ枯渇死を防止。
+  - `evaluate_t_slot_column_position`: 2〜9列目（特に3〜8列目推奨）の単一列穴（幅1マス）を最高評価（1.0）、発火後も盤面がフラットに保たれる手を優先。
+  - `validate_wall_tst_orientation`: 左壁（x=0）および右壁（x=9）のTSTにおいて、空中浮遊を排除した**盤面内向き屋根構造**のみを有効認定（+150.0）。
+  - `detect_kaidan_setup_patterns`: しゑひ式「階段のドネイト（Kaidan Setups）」を検知しボーナス（+45.0）を付与。
+- **1000回適応型進化学習 (`--tune-tspin 1000`)**:
+  - Fitness が `4270.0` $\rightarrow$ `6910.0` (+61.8%) へ大幅向上。
+
+---
 
 ### 追加 (Added)
 - **T-Spin特化 評価関数チューニングエンジン (`src/tuning.rs`)**:
