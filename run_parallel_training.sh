@@ -1,12 +1,14 @@
 #!/bin/bash
 # ==============================================================================
-# 4-Worker Parallel 10,000 Iterations Training Batch Runner
-# Usage: ./run_parallel_training_10000.sh [OPTIONAL: ITERS_PER_WORKER (default: 10000)]
+# 4-Worker Parallel Tuning Batch Runner
+# Usage: ./run_parallel_training.sh [OPTIONAL: ITERS_PER_WORKER (default: 500)]
+# Examples:
+#   ./run_parallel_training.sh       # 4 workers x 500 iters = 2,000 games/round
+#   ./run_parallel_training.sh 100   # 4 workers x 100 iters = 400 games/round
+#   ./run_parallel_training.sh 1000  # 4 workers x 1000 iters = 4,000 games/round
 # ==============================================================================
 
-set -m # Enable job control
-
-ITERS=${1:-10000}
+ITERS=${1:-500}
 WORKERS=4
 ROUND=1
 PID_FILE=".training_pids"
@@ -20,6 +22,7 @@ echo "================================================================="
 echo "       TETRIS AI 4-WORKER PARALLEL TUNING BATCH RUNNER"
 echo "  Workers: $WORKERS parallel instances"
 echo "  Iterations per Worker per Round: $ITERS"
+echo "  Total Games per Round: $((WORKERS * ITERS))"
 echo "  Auto Best Model Sync: Yes (Highest Fitness -> model.json)"
 echo "  Auto Loop across Rounds: Yes (Round 1 -> Round 2 -> Round 3 ...)"
 echo "  Stop command: ./stop_parallel_training.sh or Ctrl+C"
@@ -27,12 +30,20 @@ echo "================================================================="
 
 # Trap Ctrl+C (SIGINT) to kill all background workers cleanly
 cleanup() {
+    trap - SIGINT SIGTERM EXIT # Disable traps to prevent recursion
     echo -e "\n\n[Interrupt received] Terminating all background workers..."
-    rm -f "$PID_FILE"
-    kill -- -$$ 2>/dev/null
+    if [ -f "$PID_FILE" ]; then
+        while read -r pid; do
+            if [ -n "$pid" ] && [ "$pid" != "$$" ]; then
+                kill "$pid" 2>/dev/null
+            fi
+        done < "$PID_FILE"
+        rm -f "$PID_FILE"
+    fi
+    pkill -P $$ 2>/dev/null
     exit 0
 }
-trap cleanup SIGINT SIGTERM EXIT
+trap cleanup SIGINT SIGTERM
 
 # 1. Build release binary first
 echo "[Build] Compiling release binary with optimized GPU/HIP shaders..."
@@ -65,7 +76,7 @@ while true; do
 
     # Live progress loop
     while true; do
-        sleep 5
+        sleep 2
         running_count=0
         for pid in "${PIDS[@]}"; do
             if kill -0 "$pid" 2>/dev/null; then
@@ -87,7 +98,7 @@ while true; do
                 status_line="$status_line [W#$i: Starting...]"
             fi
         done
-        printf "\r%-100s" "$status_line"
+        printf "\r%-120s" "$status_line"
     done
     printf "\n"
 
@@ -100,8 +111,8 @@ while true; do
     echo "================================================================="
     echo "  ✅ Round #$ROUND finished successfully!"
     echo "  model.json updated with best weights."
-    echo "  🚀 Automatically proceeding to Round #$((ROUND + 1)) in 3 seconds..."
+    echo "  🚀 Automatically proceeding to Round #$((ROUND + 1)) in 2 seconds..."
     echo "================================================================="
-    sleep 3
+    sleep 2
     ((ROUND++))
 done
