@@ -3,3 +3,4 @@ tspin_records/
 checkpoints/
 logs/
 .training_pids
+.training_daemon_pid

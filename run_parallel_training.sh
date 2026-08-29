@@ -28,6 +28,9 @@ echo "  Auto Loop across Rounds: Yes (Round 1 -> Round 2 -> Round 3 ...)"
 echo "  Stop command: ./stop_parallel_training.sh or Ctrl+C"
 echo "================================================================="
 
+# Ignore SIGHUP explicitly so SSH disconnection will NOT kill the training loop
+trap '' HUP
+
 # Trap Ctrl+C (SIGINT) to kill all background workers cleanly
 cleanup() {
     trap - SIGINT SIGTERM EXIT # Disable traps to prevent recursion
@@ -59,7 +62,7 @@ while true; do
     PIDS=()
     for ((i=1; i<=WORKERS; i++)); do
         echo "  [Worker #$i] Launching $ITERS iters in background (log -> logs/worker_$i.log)..."
-        ./target/release/tetris_ai \
+        nohup ./target/release/tetris_ai \
             --tune-tspin "$ITERS" \
             --model-in model.json \
             --model-out "checkpoints/worker_${i}_best.json" \
@@ -67,6 +70,7 @@ while true; do
         pid=$!
         PIDS+=($pid)
         echo "$pid" >> "$PID_FILE"
+        disown "$pid" 2>/dev/null
     done
 
     echo ""
