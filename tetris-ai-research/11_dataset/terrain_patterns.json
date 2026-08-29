@@ -1,0 +1,79 @@
+{
+  "total_patterns": 5,
+  "patterns": [
+    {
+      "id": "pat_001_tsd_ready",
+      "name": "Standard 3-Wide TSD Notch with Single Roof",
+      "category": "tspin",
+      "notch_cols": [
+        4
+      ],
+      "roof_col": 3,
+      "recommended_cols": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "height_depth": 2,
+      "expected_attack": 4,
+      "b2b": true
+    },
+    {
+      "id": "pat_002_stsd_double",
+      "name": "STSD (Super T-Spin Double) 2-Level Pocket",
+      "category": "tspin",
+      "notch_cols": [
+        4
+      ],
+      "roof_col": 3,
+      "recommended_cols": [
+        3,
+        4,
+        5,
+        6
+      ],
+      "height_depth": 3,
+      "expected_attack": 8,
+      "b2b": true
+    },
+    {
+      "id": "pat_003_kaidan_s_donate",
+      "name": "Shiwehi S-Kaidan Setup (階段のドネイト S型)",
+      "category": "donate",
+      "step_col": 4,
+      "roof_mino": "S",
+      "recommended_cols": [
+        3,
+        4,
+        5,
+        6
+      ],
+      "preserves_2_lines": true,
+      "expected_attack": 4,
+      "b2b": true
+    },
+    {
+      "id": "pat_004_wall_tst_left_inward",
+      "name": "Left Wall TST with Inward Inboard Roof (x=0 slot, x=1 roof)",
+      "category": "tspin_triple",
+      "slot_col": 0,
+      "roof_col": 1,
+      "inner_roof_valid": true,
+      "expected_attack": 6,
+      "b2b": true
+    },
+    {
+      "id": "pat_005_wall_tst_right_inward",
+      "name": "Right Wall TST with Inward Inboard Roof (x=9 slot, x=8 roof)",
+      "category": "tspin_triple",
+      "slot_col": 9,
+      "roof_col": 8,
+      "inner_roof_valid": true,
+      "expected_attack": 6,
+      "b2b": true
+    }
+  ]
+}

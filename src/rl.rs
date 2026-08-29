@@ -13,7 +13,6 @@ pub fn run_rl_episode(
     let mut game = Game::new();
     let mut total_reward = 0.0;
     let mut turns = 0;
-    let mut tspin_recorder = crate::tspin_recorder::TSpinRecorder::new();
 
     let mut rng = rand::thread_rng();
 
@@ -52,22 +51,15 @@ pub fn run_rl_episode(
         game.current_piece.x = chosen_move.final_piece.x;
         game.current_piece.rotation = chosen_move.final_piece.rotation;
         game.current_piece.y = chosen_move.final_piece.y;
-        if chosen_move.final_piece.block_type == BlockType::T {
-            game.last_action_was_rotate = true;
-        }
 
         // 特徴量（更新前）のコピー
         let phi_s = chosen_move.features.clone();
         let v_s = chosen_move.eval_score;
 
         // 固定してライン消去（この時点でnext_pieceがスポーンし、game_over判定も走る）
-        let placed_piece = chosen_move.final_piece.clone();
         let prev_lines = game.lines_cleared;
         game.lock_piece();
         let lines_cleared_this_turn = game.lines_cleared - prev_lines;
-
-        let tspin_event = game.last_t_spin.clone();
-        tspin_recorder.record_turn(turns, &game, &placed_piece, lines_cleared_this_turn, tspin_event);
 
         // 報酬の設計
         let mut reward = crate::config::rl::SURVIVAL_REWARD;
@@ -121,9 +113,7 @@ pub fn run_rl_episode(
         }
     }
 
-    tspin_recorder.flush_remaining();
-
-    (game.lines_cleared, turns as u32, total_reward)
+    (game.lines_cleared, turns, total_reward)
 }
 
 // 多数のエピソードを実行して強化学習を進める

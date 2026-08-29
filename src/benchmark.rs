@@ -91,6 +91,7 @@ pub fn create_seeded_game(seed: u64) -> Game {
         lines_cleared: 0,
         game_over: false,
         last_action_was_rotate: false,
+        last_rotate_used_srs_kick_5: false,
         last_t_spin: None,
         btb: false,
         pending_garbage: 0,
@@ -148,11 +149,9 @@ pub fn run_single_game(
             game.hold();
         }
         game.current_piece.x = best.final_piece.x;
-        game.current_piece.rotation = best.final_piece.rotation;
         game.current_piece.y = best.final_piece.y;
-        if best.final_piece.block_type == BlockType::T {
-            game.last_action_was_rotate = true;
-        }
+        game.current_piece.rotation = best.final_piece.rotation;
+        game.last_action_was_rotate = best.was_rotate;
 
         let placed_piece = game.current_piece.clone();
         let prev_lines = game.lines_cleared;
@@ -168,14 +167,14 @@ pub fn run_single_game(
         }
         if let Some(ref name) = tspin_event {
             tspin_count += 1;
-            if name.contains("Double") {
+            if name.contains("Mini") {
+                tspin_mini += 1;
+            } else if name.contains("Double") {
                 tspin_double += 1;
             } else if name.contains("Triple") {
                 tspin_triple += 1;
             } else if name.contains("Single") {
                 tspin_single += 1;
-            } else {
-                tspin_mini += 1;
             }
         }
         let current_slots = crate::tetris::count_t_slots(&game.board);

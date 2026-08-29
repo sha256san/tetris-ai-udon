@@ -9,6 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct BoardSnapshot {
     pub turn: usize,
     pub relative_turn: i32, // -5, -4, -3, -2, -1, 0 (T-Spin), +1, +2, +3, +4, +5
+    #[serde(default)]
+    pub is_setup_turn: bool, // true if relative_turn == -1 (1 turn before T-Spin trigger)
     pub current_piece: Option<PieceInfo>,
     pub hold_piece: Option<String>,
     pub next_pieces: Vec<String>,
@@ -35,6 +37,9 @@ pub struct TSpinEventRecord {
     pub timestamp: String,
     pub t_spin_type: String,
     pub trigger_turn: usize,
+    pub btb_evaluation: String,
+    pub btb_continued_after: bool,
+    pub next_heavy_attack: Option<String>,
     pub history_before_5: Vec<BoardSnapshot>,
     pub trigger_snapshot: BoardSnapshot,
     pub history_after_5: Vec<BoardSnapshot>,
@@ -96,11 +101,14 @@ impl TSpinRecorder {
             let mut before_snapshots: Vec<BoardSnapshot> = self.history_buffer.iter().cloned().collect();
             let count_before = before_snapshots.len();
             for (idx, snap) in before_snapshots.iter_mut().enumerate() {
-                snap.relative_turn = -((count_before - idx) as i32);
+                let rel = -((count_before - idx) as i32);
+                snap.relative_turn = rel;
+                snap.is_setup_turn = rel == -1;
             }
 
             let mut trigger_snap = snapshot.clone();
             trigger_snap.relative_turn = 0;
+            trigger_snap.is_setup_turn = false;
 
             self.pending_events.push(PendingTSpinEvent {
                 event_id: self.event_counter,
@@ -121,6 +129,7 @@ impl TSpinRecorder {
                 let mut after_snap = snapshot.clone();
                 let after_idx = 6 - pending.remaining_after; // 1, 2, 3, 4, 5
                 after_snap.relative_turn = after_idx as i32;
+                after_snap.is_setup_turn = false;
                 pending.history_after_5.push(after_snap);
                 pending.remaining_after -= 1;
 
@@ -199,6 +208,7 @@ impl TSpinRecorder {
         BoardSnapshot {
             turn,
             relative_turn,
+            is_setup_turn: relative_turn == -1,
             current_piece: piece_info,
             hold_piece,
             next_pieces,
@@ -228,11 +238,43 @@ impl TSpinRecorder {
             self.output_dir, pending.event_id, safe_type, now
         );
 
+        // BTB継続判定ロジック
+        let is_mini = pending.t_spin_type.contains("Mini");
+        let mut btb_continued_after = false;
+        let mut next_heavy_attack = None;
+        let mut btb_evaluation = if !is_mini {
+            "Full T-Spin (TSD/TST - Prime Heavy Attack)".to_string()
+        } else {
+            "Wasted Mini (No follow-up heavy attack within 5 turns)".to_string()
+        };
+
+        if is_mini {
+            for snap in &pending.history_after_5 {
+                let is_tetris = snap.lines_cleared_this_turn == 4;
+                let is_full_tspin = snap.t_spin_type.as_ref().map_or(false, |t| t.contains("Double") || t.contains("Triple"));
+                if snap.btb && (is_tetris || is_full_tspin) {
+                    btb_continued_after = true;
+                    let desc = if is_tetris { "Tetris (4-Lines)" } else { "Full T-Spin" };
+                    next_heavy_attack = Some(format!("Turn {} : {}", snap.turn, desc));
+                    btb_evaluation = format!("Successful Mini -> BTB Maintained with {}", desc);
+                    break;
+                } else if snap.lines_cleared_this_turn > 0 && !snap.btb {
+                    btb_evaluation = "Wasted Mini (BTB Broken by non-B2B clear)".to_string();
+                    break;
+                }
+            }
+        } else {
+            btb_continued_after = true;
+        }
+
         let record = TSpinEventRecord {
             event_id: pending.event_id,
             timestamp: now.clone(),
             t_spin_type: pending.t_spin_type.clone(),
             trigger_turn: pending.trigger_turn,
+            btb_evaluation: btb_evaluation.clone(),
+            btb_continued_after,
+            next_heavy_attack: next_heavy_attack.clone(),
             history_before_5: pending.history_before_5.clone(),
             trigger_snapshot: pending.trigger_snapshot.clone(),
             history_after_5: pending.history_after_5.clone(),
@@ -249,6 +291,10 @@ impl TSpinRecorder {
             let _ = writeln!(file, "================================================================================");
             let _ = writeln!(file, "  T-SPIN EVENT RECORD #{:03} : {} (Turn {})", pending.event_id, pending.t_spin_type, pending.trigger_turn);
             let _ = writeln!(file, "  Recorded at: {}", now);
+            let _ = writeln!(file, "  BTB Status : {}", btb_evaluation);
+            if let Some(ref attack) = next_heavy_attack {
+                let _ = writeln!(file, "  Follow-up  : {}", attack);
+            }
             let _ = writeln!(file, "================================================================================\n");
 
             let mut all_steps = Vec::new();
@@ -261,16 +307,25 @@ impl TSpinRecorder {
             }
 
             for snap in all_steps {
-                let header = if snap.relative_turn == 0 {
-                    format!("★ [Turn {} | T-SPIN TRIGGER: {}] ★", snap.turn, snap.t_spin_type.as_deref().unwrap_or("T-Spin"))
+                if snap.relative_turn == 0 {
+                    let _ = writeln!(file, "================================================================================");
+                    let _ = writeln!(file, "  ★ [Turn {} | T-SPIN TRIGGER: {}] ★", snap.turn, snap.t_spin_type.as_deref().unwrap_or("T-Spin"));
+                    let _ = writeln!(file, "================================================================================");
+                } else if snap.relative_turn == -1 {
+                    let _ = writeln!(file, "================================================================================");
+                    let _ = writeln!(file, "  🔥🔥🔥 【T-SPIN SETUP MOVE: 1 TURN BEFORE TRIGGER (Turn {})】 🔥🔥🔥", snap.turn);
+                    let _ = writeln!(file, "  Setup Action: Roof & Foundation Placement for upcoming T-Spin");
+                    let _ = writeln!(file, "================================================================================");
                 } else if snap.relative_turn < 0 {
-                    format!("▼ [Turn {} | {} turns BEFORE T-Spin]", snap.turn, snap.relative_turn.abs())
+                    let _ = writeln!(file, "--------------------------------------------------------------------------------");
+                    let _ = writeln!(file, "▼ [Turn {} | {} turns BEFORE T-Spin]", snap.turn, snap.relative_turn.abs());
+                    let _ = writeln!(file, "--------------------------------------------------------------------------------");
                 } else {
-                    format!("▲ [Turn {} | +{} turns AFTER T-Spin]", snap.turn, snap.relative_turn)
-                };
+                    let _ = writeln!(file, "--------------------------------------------------------------------------------");
+                    let _ = writeln!(file, "▲ [Turn {} | +{} turns AFTER T-Spin]", snap.turn, snap.relative_turn);
+                    let _ = writeln!(file, "--------------------------------------------------------------------------------");
+                }
 
-                let _ = writeln!(file, "--------------------------------------------------------------------------------");
-                let _ = writeln!(file, "{}", header);
                 let _ = writeln!(file, "Piece: {:?} | Hold: {:?} | Next: {:?} | Score: {} | Lines: {} | BTB: {}",
                     snap.current_piece, snap.hold_piece, snap.next_pieces, snap.score, snap.total_lines_cleared, snap.btb);
                 let _ = writeln!(file, "--------------------------------------------------------------------------------");
@@ -316,5 +371,55 @@ mod tests {
 
         // After turn 11, the event should be finalized and saved
         assert_eq!(recorder.pending_events.len(), 0);
+    }
+
+    #[test]
+    fn test_tspin_mini_btb_continuation_tracking() {
+        let mut recorder = TSpinRecorder::new();
+        let mut game = Game::new();
+        let piece = Piece::new(BlockType::I);
+
+        // 1. Record 3 initial turns
+        for turn in 1..=3 {
+            recorder.record_turn(turn, &game, &piece, 0, None);
+        }
+
+        // 2. Trigger T-Spin Mini Single on turn 4
+        let t_piece = Piece::new(BlockType::T);
+        recorder.record_turn(4, &game, &t_piece, 1, Some("T-Spin Mini Single".to_string()));
+
+        // 3. Next turn (turn 5) fires Tetris (4 lines with btb = true)
+        game.btb = true;
+        game.lines_cleared = 4;
+        let i_piece = Piece::new(BlockType::I);
+        recorder.record_turn(5, &game, &i_piece, 4, None);
+
+        // 4. Fill remaining turns
+        for turn in 6..=9 {
+            recorder.record_turn(turn, &game, &piece, 0, None);
+        }
+
+        // Event should be finalized
+        assert_eq!(recorder.pending_events.len(), 0);
+    }
+
+    #[test]
+    fn test_setup_turn_highlighting() {
+        let mut recorder = TSpinRecorder::new();
+        let game = Game::new();
+        let s_piece = Piece::new(BlockType::S);
+
+        // Turn 1 (setup move)
+        recorder.record_turn(1, &game, &s_piece, 0, None);
+
+        // Turn 2 (T-Spin Trigger)
+        let t_piece = Piece::new(BlockType::T);
+        recorder.record_turn(2, &game, &t_piece, 2, Some("T-Spin Double".to_string()));
+
+        assert_eq!(recorder.pending_events.len(), 1);
+        let before = &recorder.pending_events[0].history_before_5;
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].relative_turn, -1);
+        assert!(before[0].is_setup_turn, "Relative turn -1 must have is_setup_turn == true");
     }
 }

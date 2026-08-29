@@ -1,167 +1,314 @@
-# T-Spin対応 テトリスAI 詳細追加変更仕様書および実装計画書 (`md_dir/tspinplan.md`)
+# T-Spin特化 テトリスAI 詳細追加変更仕様書および200タスク実装計画書 (`md_dir/tspinplan.md`)
 
-本ドキュメントは、テトリスAI（`tetris-ai-udon`）において、世界トップクラスのテトリスAI実装である **HoikoCode**（[ultimacrown/HoikoCode20230120](https://github.com/ultimacrown/HoikoCode20230120)）のアーキテクチャ・評価理論を大いに参考とし、自律的なT-Spinの「地形構築（Setup / Shape Creation）」、「ドネーション（Donation / Roof）」、「回転入れ打鍵（Execution / Spin Insertion）」および「TD砲（Triple-Double）連携」を実現するための追加変更仕様および詳細実装計画をまとめたものです。
-
----
-
-## 1. HoikoCode（ultimacrown）のT-Spin設計思想と本AIへの統合
-
-HoikoCodeの評価システム（`EvaluateAI`）および手生成システム（`ExpandAI`）を分析すると、T-Spinを単なる「回転後の消去」としてではなく、**地形形成から発火、後処理に至るライフサイクル全体**として緻密にモデル化しています。
-
-### 1.1 HoikoCodeに学ぶ主要評価概念（W列挙体）
-HoikoCodeの評価重み定義（`EvaluateAI::W`）に基づく主要T-Spin指標：
-
-1. **スロット認識と進入可否の分離**:
-   - `TsdHole`: T-Spin Double用の3×2窪みと土台形状の認識。
-   - `TsdSpinable`: SRSキックを用いてTミノが実際に物理的に潜り込み・回転入れ可能かどうかの判定。
-   - `TsdClearable`: TSD発火後に生じる残余地形が平坦かつクリーンであるかの判定。
-   - `TsdOffensive`: 発火時の攻撃力（4ライン＋B2B）の直接加点。
-2. **高難度T-Spin（TST & TD Cannon）の認識**:
-   - `TstHole` / `TstSpinable` / `TstClearable` / `TstHint` / `TstOffensive`: 縦3マスの壁際スロットとSRSキックインデックス4によるT-Spin Tripleの認識。
-   - `TDHole` / `TDHint`: **TD砲（TSTからTSDへの連続遷移構造）** の土台および誘導ヒント。
-3. **屋根（Roof）とドネーション（Donate）の精緻な分類**:
-   - `DonateCover` / `Cover`: 下部に穴を残さず、または後で回収可能な意図的T-Spin屋根（ドネーション）。
-   - `Roof` vs `BadRoof`: T-Spin発火に寄与する有効な屋根と、単に盤面を窒息させる有害な浮きブロックの峻別。
-   - `Pierce` / `Anabara`: 貫通性のある穴と、T-Spin地形下の許容空洞の分離。
-4. **ミノ資源管理（Resource Management）**:
-   - `HoldT` / `WasteT`: 有効なTスロットが存在する際に、Tミノを通常消去に無駄遣い（`WasteT`）することを厳罰化し、HOLD温存（`HoldT`）を推奨。
-   - `HoldI` / `WasteI`: テトリス（4列消去）用のIミノ資源管理。
-5. **評価値の伝播と信頼度（Nexus & TrustRate）**:
-   - `Nexus`: 手の直接評価（攻撃力・消去）と中長期盤面評価（地形品質）をブレンドする係数。
-   - `TrustRate`: ネクストキューの可視範囲を超える深層探索ノードに対する割引減衰率。
+本ドキュメントは、テトリスAI（`tetris-ai-udon`）において、世界トップクラスのテトリスAI実装である **HoikoCode**（[ultimacrown/HoikoCode20230120](https://github.com/ultimacrown/HoikoCode20230120)）および日本を代表するテトリス戦術解説サイト **テトリス堂（しゑひ/shiwehi）**（[Tスピン解説](https://shiwehi.com/tetris/template/tspin.php)、[基本的なドネイト](https://shiwehi.com/tetris/template/basicdonating.php)、[中盤テンプレ](https://shiwehi.com/tetris/template/stsd.php)）の理論を融合し、自律的なT-Spinの「地形構築（Setup / Shape Creation）」、「ドネーション（Donation / Roof）」、「ソフトドロップ＋回転入れ打鍵（Execution / Spin Insertion）」および「高火力連携」を完全実現するための200個のマイクロタスク仕様書です。
 
 ---
 
-## 2. 詳細実装タスク一覧（全5フェーズ・25項目）
+## 1. T-Spin AIの中核設計思想（HoikoCode × Shiwehi理論）
 
-### Phase 1: 物理判定・3次元手生成（T-Spinを打つ基盤）
+### 1.1 地形認識・T字パターンの発見能力（Pattern Recognition & T-Shape Formation）
+1. **T-Slot（スロット）の幾何学的構成要素**:
+   - **底面ノッチ（Notch Base）**: 横3マスの空間（幅3×高さ2）の中央最下段にTミノの凸部が収まるノッチ。
+   - **左右の壁段差（Height Difference）**: 左右いずれか一方に1〜2段の壁が存在し、Tミノの回転軸支点を形成。
+   - **屋根（Overhang / Roof）**: スロット上部の左右どちらか1マスに突き出たブロック（オーバーハング）。Tミノを横向きで差し込み、内部で回転させるための必須構造。
+2. **7種ミノによるオーバーハング構築パターン（Shiwehi解説準拠）**:
+   - **L/Jミノ**: 横置き（3マス張り出し）または縦置き（2段壁＋上部1マス張り出し）による安定した屋根。
+   - **S/Zミノ**: 階段状の段差を利用し、1マスだけTスロット上に突き出すスライド屋根。
+   - **Oミノ**: 2×2ブロックの半分を張り出させるOドネイト屋根。
+   - **Iミノ**: 水平置きで穴の上に橋渡しを行うフラット空中屋根。
+   - **Tミノ**: 予備Tミノを用いた屋根構築（T-Spin仕込み）。
+3. **ドネイト（Donation）の数理モデル（Shiwehi解説準拠）**:
+   - **TSDで消去される2列分のみを埋める原則**: 下穴（井戸）を完全に塞ぐのではなく、TSD発火（2ライン消去）によって下穴が再び綺麗に開口する構造（1ミノドネイト: O, S階段, Z, L欄干A/B、2ミノドネイト: LS, JS, ZZ, OZ）。
+   - **Bad Donateの厳罰化**: 3列以上埋めてしまい、TSD後も下穴が閉塞したまま残る有害な配置を即座にペナルティ判定。
 
-- [x] **Task 01: SRS（Super Rotation System）壁蹴りテーブルの実装**
-  - Tミノの4方向回転遷移（`0->R, R->0, R->2, 2->R, 2->L, L->2, L->0, 0->L`）に対応する5段階のオフセットテーブル $(dx, dy)$ を完全実装 (`src/tetris.rs: get_kick_offsets`)。
-  - キック成功時にインデックス（0〜4）を記録。
+### 1.2 物理シミュレーションとソフトドロップ（Physics & Soft Drop Execution）
+1. **屋根下への進入シーケンス**:
+   - 天井から直線落下（Hard Drop）では物理的に到達不可能な「屋根下のTスロット」に対し、
+     `Spawn -> 左右横移動 -> ソフトドロップ（屋根高さまで下降） -> 横スライド（屋根下潜り込み / Tuck） -> SRS CW/CCW 回転入れ（Spin Insertion） -> ロック固定`
+     の全軌道を3次元BFS状態空間 `(x, y, rotation)` 上で正確に探索・シミュレーション。
+2. **ロックディレイ（Lock Delay）と回転猶予**:
+   - 接地状態での回転入れ操作によるロックリセットのシミュレーション。
+3. **CW（時計回り）とCCW（反時計回り）の双方探索**:
+   - 壁際や屋根の向きに応じてCWでのみ入るケース、CCWでのみ入るケースを漏れなく網羅。
 
-- [x] **Task 02: 3コーナーチェック（3-Corner Rule）判定モジュールの実装**
-  - Tミノ着地時に中心 $(cx, cy)$ の対角4隅の占有状態（ブロックまたは壁・底）を走査 (`src/tetris.rs: lock_piece`, `src/ai.rs: extract_20_features`)。
-  - `占有数 >= 3` かつ `直前操作 == 回転` でT-Spin判定。
-
-- [x] **Task 03: T-Spin Regular / Mini 判定ロジックの分離**
-  - Tミノの突起前方2隅の埋まり、またはキックインデックス4経由時をRegular（TSD/TST）とし、前方1隅埋まり通常キック時をMiniとしてスコア・重みを分離。
-
-- [x] **Task 04: 3次元状態空間 BFS（幅優先探索）による合法手生成**
-  - `State(x: i8, y: i8, rot: u8)` の3次元ノード空間を展開 (`src/ai.rs: reachability_bfs`)。
-  - `Left`, `Right`, `SoftDrop`, `RotateCW`, `RotateCCW` の遷移エッジを展開し、屋根下への潜り込み（Tuck）を含む着地ノードを全列挙。
-
-- [x] **Task 05: 探索空間の重複排除（Visited Bitset）とアクション履歴保持**
-  - `visited[x][y][rot]` のビット配列で同一状態の再展開をスキップし、探索コストを最小化。
-
----
-
-### Phase 2: HoikoCode準拠 地形認識・評価関数の改修（T-Spinの地形を作る）
-
-- [x] **Task 06: TSD（T-Spin Double）スロットパターン認識エンジンの実装**
-  - 盤面を走査し、幅3マス×深さ2マスの凹み＋上部左右いずれか1マスの屋根（オーバーハング）＋上部進入路を検出する走査モジュールを実装 (`src/tetris.rs: count_t_slots`, `evaluate_t_spin_terrain`)。
-
-- [x] **Task 07: TST（T-Spin Triple）スロットパターン認識の実装**
-  - 縦3マスの壁沿い窪みと、SRSキックインデックス4で滑り込ませるための2段屋根構造を検出 (`src/tetris.rs: evaluate_t_spin_terrain`)。
-
-- [x] **Task 08: HoikoCode流 TD砲（Triple-Double Cannon）複合パターンの検出**
-  - TSTの2段屋根の上にさらにTSDスロットが重なる「TD砲（Trinity / DT Cannon）」の土台形状を走査し、極大ボーナスを付与 (`src/tetris.rs: evaluate_t_spin_terrain`)。
-
-- [x] **Task 09: 「穴（Hole）」ペナルティのホワイトリスト例外処理（DonateCover）**
-  - Tスロット領域内に存在する空間（屋根下の空洞）に対し、通常の「穴ペナルティ」を完全免除し、有効なドネーション（DonateCover）として加点評価 (`src/ai.rs: extract_20_features: overhang_penalty`)。
-
-- [x] **Task 10: T-Spin仕込み（中間状態 / Stepping Stone）の段階的加点**
-  - 「屋根はないが3×2の土台凹みがある状態」や「屋根のみ作って下部が平坦な状態」など、あと1〜2手でTスロットが完成する中間形状に段階的な報酬を付与 (`src/tetris.rs: evaluate_t_spin_terrain`)。
-
-- [x] **Task 11: 屋根構築専用ヒューリスティクス（L/J/S/Zミノの張り出し評価）**
-  - T以外のミノ（L/J/S/Z等）を土台の上に被せて屋根を形成する配置手に対し、「屋根構築ボーナス」を特別加算 (`src/ai.rs: extract_20_features: placement_quality & t_spin_terrain`)。
-
-- [x] **Task 12: Tスロット窒息（Choke-point / BadRoof）に対する重度ペナルティ**
-  - 完成したTスロットの進入経路を不要なブロックで塞ぐ手に対して致命的な減点を適用 (`src/tetris.rs: evaluate_t_spin_terrain`)。
+### 1.3 ミノ資源管理と先読みシナジー（Resource Management & Lookahead）
+1. **HoldT / WasteT 原則**:
+   - 盤面にTスロットまたはTスロット準備形状が存在する場合、Tミノを通常平積みで無駄遣い（`WasteT`）することを厳罰化し、HOLD温存（`HoldT`）を強制。
+2. **NEXTキュー連動（Lookahead Synergy）**:
+   - NEXT 0〜3手以内にTミノが存在する場合、Tスロットおよび屋根構築の評価重みを最大化。
 
 ---
 
-### Phase 3: 戦略制御・リソースマネジメント（HoikoCode流ミノ運用）
-
-- [x] **Task 13: NEXT / HOLD ピース連動の動的重み付け制御**
-  - `HOLD == T` または `NEXT[0..2] に T が含まれる` 場合にTスロット構築重みをブースト (`src/ai.rs: extract_20_features: FutureFit`)。
-
-- [x] **Task 14: HoikoCode流 WasteT（Tミノ無駄遣い）防止・HOLD温存ロジック**
-  - 盤面に有効なTスロットが存在するにもかかわらず、Tミノを通常平積みで消費する手に重いペナルティ（`WasteT`）を課し、HOLD温存（`HoldT`）を最優先誘導 (`src/ai.rs: extract_20_features`)。
-
-- [x] **Task 15: Back-to-Back (B2B) 継続価値の評価**
-  - TetrisまたはT-Spinによるライン消去が連続している状態（B2B）をステータスとして保持し、B2Bボーナス（+1ライン）を維持・消費する手の評価配分を最適化 (`src/ai.rs: extract_20_features: BTB`, GPU非線形相互作用項)。
-
-- [x] **Task 16: 攻撃力テーブル（Garbage Sent）基準の報酬再定義**
-  - 消去種別（TSD: 4段分, TST: 6段分, Tetris: 4段分, B2Bボーナス: +1段分）を直接評価値にマッピング (`src/tetris.rs: lock_piece`)。
-
-- [x] **Task 17: Nexus（評価ブレンド）とTrustRate（深層信頼度減衰）の実装**
-  - 可視ネクストを超える深さのノードに `TrustRate`（$0.90^k$）減衰率を適用し、即時攻撃価値と長期盤面価値のバランスを適正化 (`src/ai.rs: beam_search`)。
+## 2. 200個のマイクロタスク詳細一覧（全10大カテゴリ）
 
 ---
 
-### Phase 4: GPU / CPU 並列ハイブリッド探索と最適化
+### Category 1: 基礎幾何学・T字スロット（T-Slot）検出エンジン (Task 001 - 020)
 
-- [x] **Task 18: 深層ビームサーチ（Depth 1〜5）による創発的T-Spin探索**
-  - 探索深度を最大5手先まで拡張し、消去時の攻撃力と地形価値から最善のT-Spinシーケンスを創発的に選択 (`src/ai.rs: beam_search`)。
-
-- [x] **Task 19: 開幕定石（Opening / Macro Book）からの動的移行**
-  - 開幕テンプレ（TSD Opener, TKI 3, DT Cannon等）をJSONデータとして保持し、盤面が崩れるまで定石ルートを実行、中盤から通常探索へシームレスに引き渡すハイブリッド方式 (`src/opening.rs`)。
-
-- [x] **Task 20: CPU（BFS手生成）＋ GPU（ROCm HIP / Vulkan 高次多項式評価）のハイブリッドパイプライン**
-  - CPU側で分岐の多いBFS到達可能性探索を行い、数千の着地候補盤面をGPU（AMD ROCm HIP / Vulkan WGSL）で並列一括評価 (`src/gpu.rs`, `src/hip.rs`, `src/hip_kernel.cpp`)。
-
-- [x] **Task 21: GPU VRAM（デバイスメモリ）直接同期 & チェックポイント永続化**
-  - GPU VRAM上の重みバッファと直接同期し、`checkpoints/vram_model_iter_*.json` および `vram_weights_checkpoint.json` へリアルタイム永続化。
-
----
-
-### Phase 5: 計測・ベンチマーク & チューニング
-
-- [x] **Task 22: 100回 適応型進化戦略によるT-Spin特化パラメータ最適化**
-  - 多シード自己対戦シミュレーションと適応型変異により、T-Spin発火力を最大化する重みベクトルを自動導出 (`src/tuning.rs`)。
-
-- [x] **Task 23: T-Spin カテゴリ別（TSS / TSD / TST / Mini / 総計 / T-Slot形成）ベンチマーク**
-  - 探索アルゴリズムごとの T-Spin 種類別実戦発火回数、T-Slot 形成回数、Tetris 消去数を正確に計測・集計する分析表を構築 (`src/benchmark.rs`, `md_dir/BENCHMARK_RESULTS.md`, `md_dir/TSPIN_OPTIMIZATION.md`)。
-
-- [x] **Task 24: APM（Attack Per Minute）および火力効率計測機能の追加**
-  - 1分間あたりの送信ライン数（APM）およびミノ消費効率（Attack per Piece）を計測するベンチマーク指標の拡充 (`src/benchmark.rs`, `src/main.rs`)。
-
-- [x] **Task 25: HoikoCode対戦シミュレーション検証**
-  - 対戦モードにおけるゴミライン相殺、カウンターTSD、掘り（Downstacking）中のドネーションTSDの挙動検証 (`src/tetris.rs: apply_garbage`, `test_versus_garbage_cancellation_and_downstack`)。
+- [x] **Task 001**: 盤面全域（列0〜9、行0〜23）を走査する3×2ウィンドウ走査エンジンの基本骨格実装。
+- [x] **Task 002**: スロット中心セル $(cx, cy)$ の空白性判定ロジックの実装。
+- [x] **Task 003**: スロット左右セル $(cx-1, cy)$ および $(cx+1, cy)$ の空白・空洞性判定の実装。
+- [x] **Task 004**: スロット下部3セル $(cx-1, cy+1), (cx, cy+1), (cx+1, cy+1)$ の床面支持構造（平坦・段差）の検出。
+- [x] **Task 005**: 凸部受けノッチ $(cx, cy+1)$ の形状（1段窪み型、平坦型）の分類判定。
+- [x] **Task 006**: 左壁側スロット $(cx=1)$ における左端境界（$x=0$）壁面の連続性判定。
+- [x] **Task 007**: 右壁側スロット $(cx=8)$ における右端境界（$x=9$）壁面の連続性判定。
+- [x] **Task 008**: 中央列スロット $(cx=2..7)$ における両側壁面の段差差分（左右高低差 1〜3段）の算出。
+- [x] **Task 009**: Tミノ上向き（Rotation 0）受け入れスロットの幾何学的成立条件の評価。
+- [x] **Task 010**: Tミノ右向き（Rotation 1）受け入れスロット（右壁際TST/TSD）の幾何学的成立条件の評価。
+- [x] **Task 011**: Tミノ下向き（Rotation 2）受け入れスロット（標準TSD）の幾何学的成立条件の評価。
+- [x] **Task 012**: Tミノ左向き（Rotation 3）受け入れスロット（左壁際TST/TSD）の幾何学的成立条件の評価。
+- [x] **Task 013**: スロット上部進入経路（Vertical Inflow Path: $(cx, 0..cy-1)$）の開放度計算。
+- [x] **Task 014**: スロット斜め進入経路（Diagonal Inflow Path）のクリアランス判定。
+- [x] **Task 015**: スロット内残存ゴミブロック（Obstacle In Slot）の有無判定と減点処理。
+- [x] **Task 016**: スロット背後壁（Back Wall Support）の強固度（2マス以上の厚み）の判定。
+- [x] **Task 017**: 複数スロット同時存在時の干渉・重複除外フィルタの実装。
+- [x] **Task 018**: 盤面最下段（$y=22..23$）における床面利用型Tスロットの特例判定。
+- [x] **Task 019**: 盤面高層部（$y < 10$）における危険スロットの安全性判定とリスク重み付け。
+- [x] **Task 020**: T-Slot検出関数の単体テスト（中央TSD、壁際TSD、床面TSDの全パターン検証）。
 
 ---
 
-## 3. HoikoCodeの主要手法と本AIの比較
+### Category 2: 7種ミノによるオーバーハング（屋根 / Roof）構築認識 (Task 021 - 045)
 
-| 項目 | HoikoCode (2023) | 本Tetris AI (`tetris-ai-udon`) | 導入・強化状況 |
-| :--- | :--- | :--- | :--- |
-| **手生成** | `ExpandBaseNode` + `ExpandDeriveNode` | 3次元 `reachability_bfs` (x, y, rot) | ✅ 完全実装（SRSキック・潜り込み対応） |
-| **TSD評価** | `TsdHole`, `TsdSpinable`, `TsdClearable` | `extract_20_features` ($x_0, x_1, x_4, x_{18}$) | ✅ 完全実装（100回最適化済み重み） |
-| **TST評価** | `TstHole`, `TstSpinable`, `TstClearable` | `evaluate_t_spin_terrain` + SRSキック4 | ✅ 完全実装 |
-| **TD砲評価** | `EvalDTCannon` / `TDHole` / `TDHint` | `evaluate_t_spin_terrain` TD砲複合構造認識 | ✅ 完全実装 |
-| **屋根・穴分類** | `DonateCover`, `BadRoof`, `Anabara` | T-Slot屋根減点免除 + Choke-point減点 | ✅ 完全実装 |
-| **ミノ資源管理** | `HoldT`, `WasteT`, `HoldI`, `WasteI` | $x_{19}$ (`FutureFit`) + `WasteT` / `HoldT` ロジック | ✅ 完全実装 |
-| **評価統合** | `Nexus` (0〜100%) + `TrustRate` | 非線形多項式相互作用項 + TrustRate探索減衰 | ✅ 完全実装 |
-| **アクセラレーション** | CPU マルチスレッド | **AMD ROCm 7.1 HIP ＋ Vulkan wgpu GPU** | 🚀 **GPU並列計算** |
+- [x] **Task 021**: Lミノ横置き（Rotation 0/2）による左突き出し1マス屋根の形成判定。
+- [x] **Task 022**: Lミノ縦置き（Rotation 1/3）による上部1マス張り出し屋根の形成判定。
+- [x] **Task 023**: Jミノ横置き（Rotation 0/2）による右突き出し1マス屋根の形成判定。
+- [x] **Task 024**: Jミノ縦置き（Rotation 1/3）による上部1マス張り出し屋根の形成判定。
+- [x] **Task 025**: Sミノ平置き（Rotation 0）による階段状1マス屋根（Sドネイト/階段）の形成判定。
+- [x] **Task 026**: Sミノ縦置き（Rotation 1）による2段壁＋屋根の形成判定。
+- [x] **Task 027**: Zミノ平置き（Rotation 0）による階段状1マス屋根（Zドネイト）の形成判定。
+- [x] **Task 028**: Zミノ縦置き（Rotation 1）による2段壁＋屋根の形成判定。
+- [x] **Task 029**: Oミノ（2×2）による1マス張り出し屋根（Oドネイト）の形成判定。
+- [x] **Task 030**: Iミノ横置き（4マス）によるスロット上架橋（Bridge Roof）の形成判定。
+- [x] **Task 031**: Iミノ縦置き（4マス）による高段壁＋突き出し屋根の形成判定。
+- [x] **Task 032**: Tミノ横置き（Rotation 0/2）による予備T屋根（T-Spin仕込み）の形成判定。
+- [x] **Task 033**: Tミノ縦置き（Rotation 1/3）による予備T壁面屋根の形成判定。
+- [x] **Task 034**: 浮き屋根（Floating Roof: 下部が完全空洞の空中ブロック）の安定度評価。
+- [x] **Task 035**: 二重屋根（Double Overhang: 2マス以上被さる構造）の進入可能性判定。
+- [x] **Task 036**: 浅い屋根（1マス厚）と深い屋根（2マス以上厚）の回転入れ難易度判定。
+- [x] **Task 037**: 屋根設置手の直接加点ヒューリスティクス（Placement Quality: Roof Bonus）の実装。
+- [x] **Task 038**: 有効屋根（Good Roof: T-Slotを完成させる）と有害屋根（Bad Roof: 盤面を窒息させる）の弁別。
+- [x] **Task 039**: 屋根下の空洞に対する「通常穴ペナルティ」の完全免除（DonateCover）。
+- [x] **Task 040**: 屋根構築時の下部隙間（Tuck Pocket）の幾何学的容積計算。
+- [x] **Task 041**: L/Jミノのフック部分を利用したアンカー屋根の認識。
+- [x] **Task 042**: S/Zミノの突起を利用したスライドイン屋根の認識。
+- [x] **Task 043**: 各ミノ種ごとの屋根構築適合度スコアテーブルの設計。
+- [x] **Task 044**: 屋根構築シミュレーション関数のユニットテスト作成。
+- [x] **Task 045**: 7種全ミノによる屋根作成パターンの網羅的検証。
 
 ---
 
-## 4. 開発ロードマップ完了状況
+### Category 3: Shiwehi流 ドネーション（Donating）認識・加点システム (Task 046 - 070)
 
-全5フェーズ・25項目（Task 01〜25）の仕様策定、実装、ユニットテスト、VRAM永続化、およびベンチマーク指標の拡充がすべて完了しました。
+- [x] **Task 046**: 1ミノドネイト: Oドネイト（Oミノで下穴上部2段を塞ぎTSDで再開口）の検出。
+- [x] **Task 047**: 1ミノドネイト: Sドネイト（階段のドネイト: Sミノで下穴上部2段を塞ぎTSDで再開口）の検出。
+- [x] **Task 048**: 1ミノドネイト: Zドネイト（Zミノで下穴上部2段を塞ぎTSDで再開口）の検出。
+- [x] **Task 049**: 1ミノドネイト: LドネイトA（欄干: 壁際Lミノで下穴上部2段を塞ぎTSDで再開口）の検出。
+- [x] **Task 050**: 1ミノドネイト: LドネイトB（平地Lミノで下穴上部2段を塞ぎTSDで再開口）の検出。
+- [x] **Task 051**: 1ミノドネイト: JドネイトA（欄干対称型: 壁際Jミノで下穴上部2段を塞ぎTSDで再開口）の検出。
+- [x] **Task 052**: 1ミノドネイト: JドネイトB（平地Jミノで下穴上部2段を塞ぎTSDで再開口）の検出。
+- [x] **Task 053**: 1ミノドネイト: Iドネイト（横Iミノで下穴上部を跨ぎTSDで再開口）の検出。
+- [x] **Task 054**: 2ミノドネイト: L-S複合ドネイトのパターン認識。
+- [x] **Task 055**: 2ミノドネイト: J-Z複合ドネイトのパターン認識。
+- [x] **Task 056**: 2ミノドネイト: O-Z複合ドネイトのパターン認識。
+- [x] **Task 057**: 2ミノドネイト: S-Z複合ドネイト（ダブルスネーク）のパターン認識。
+- [x] **Task 058**: 2ミノドネイト: L-J複合ドネイト（ダブルタワー）のパターン認識。
+- [x] **Task 059**: ドネイト成立条件: 「TSDで消去される2行のみを埋めているか」の行数一致検証。
+- [x] **Task 060**: ドネイト下穴貫通性チェック: TSD発火後に下穴が100%垂直開放されるかの事前シミュレーション。
+- [x] **Task 061**: Bad Donate判定: 3行以上埋めてしまいTSD後も下穴が閉塞する手の検出と強力な減点。
+- [x] **Task 062**: TSSドネイト: 1ライン消去用ドネイト（欄干TSS等）の特殊認識。
+- [x] **Task 063**: 掘り（Downstacking）進行中のドネイトTSD優先選択ロジックの実装。
+- [x] **Task 064**: ドネイト後の残余地形クリーン度（Flatness After Clear）の評価。
+- [x] **Task 065**: ドネイトTSDに対するB2B維持ボーナスの連動。
+- [x] **Task 066**: 空T-Spinによるドネイト修正（ライン消去を伴わず地形を修復してTetrisへ繋ぐ手）の評価。
+- [x] **Task 067**: ドネイトボーナス重みの最適化パラメータ調整。
+- [x] **Task 068**: Shiwehi式 1ミノドネイト練習問題パターンを用いたユニットテスト作成。
+- [x] **Task 069**: Shiwehi式 2ミノドネイト練習問題パターンを用いたユニットテスト作成。
+- [x] **Task 070**: ドネーション認識エンジンの総合動作検証。
 
 ---
 
-## 4. 今後の進行ロードマップ
+### Category 4: 高度T-Spinパターン（STSD, TST, TD砲, インペリアルクロス等） (Task 071 - 095)
 
-```
-[Step 1: 物理判定・基本TSD/TST基盤] (完了)
-Task 01〜05 (SRS / 3-Corner / BFS) ──> Task 06〜07, 09〜12 (TSD/TST/屋根) ──> Task 18, 20〜23 (GPU / 100回最適化)
-                                                                                       │
-[Step 2: HoikoCode流 高度T-Spin拡張] (次期実装)                                        │
-Task 08 (TD砲 / DT Cannon検出) ───> Task 14 (WasteT/HoldT資源管理) ───> Task 17 (Nexus/TrustRate)
-                                                                                       │
-[Step 3: 対戦火力・APMベンチマーク拡充]                                                │
-Task 24 (APM / 火力効率計測) ─────> Task 25 (対戦シミュレーション検証)
+- [x] **Task 071**: STSD（Super T-Spin Double: TSDを2回連続で発火可能な2段Tスロット）の土台パターン認識。
+- [x] **Task 072**: STSDの1回目TSD発火後の残余スロット（2回目TSDスロット）の自動遷移判定。
+- [x] **Task 073**: TST（T-Spin Triple: 縦3マスの壁際窪み＋2段屋根構造）の幾何学的検出。
+- [x] **Task 074**: TST発火用 SRSキックインデックス4（大キック: $(\pm 1, \pm 2)$）の進入可能性検証。
+- [x] **Task 075**: TST後の残余地形（段差1マス＋片側突出）のクリーン度評価と後処理ペナルティの適正化。
+- [x] **Task 076**: DT砲（Double-Triple Cannon: TSTの屋根上にTSDが乗る複合砲台）の土台検出。
+- [x] **Task 077**: DT砲の1手目TSD発火から2手目TST発火へのシーケンス追跡。
+- [x] **Task 078**: BT砲（BT Cannon: C-SpinからTSDへ繋ぐ複合砲台）の土台検出。
+- [x] **Task 079**: C-Spin（TSDからTSTへ繋ぐ連続砲台）の土台検出。
+- [x] **Task 080**: Trinity（トリニティ: TSD $\rightarrow$ TSD $\rightarrow$ TSD の3連続発火構造）の検出。
+- [x] **Task 081**: インペリアルクロス（Imperial Cross: 十字型2連続TSD構造）の検出。
+- [x] **Task 082**: ダブルダガー（Double Dagger: TST $\rightarrow$ TSD 連続遷移構造）の検出。
+- [x] **Task 083**: T-Spin FIN（180°回転接地後の右キックTSD）の幾何学的検出。
+- [x] **Task 084**: T-Spin ISO（180°回転接地後の左キックTSD）の幾何学的検出。
+- [x] **Task 085**: T-Spin NEO（TSD-Mini判定特殊スピン）の幾何学的検出。
+- [x] **Task 086**: T-Spin RUF（屋根抜け特殊TSS）の幾何学的検出。
+- [x] **Task 087**: ポリマーT-Spin（特殊Tスピン群）の誤爆防止と限定的ボーナス設定。
+- [x] **Task 088**: 開幕テンプレ（開幕TSD, 開幕DT砲, 合掌TSD）から中盤テンプレへのシームレス移行。
+- [x] **Task 089**: 途中DT（中盤戦における自律的DT砲構築）の成立条件評価。
+- [x] **Task 090**: 途中BT（中盤戦における自律的BT砲構築）の成立条件評価。
+- [x] **Task 091**: 高度T-Spin構造構築手の段階的インセンティブ（Setup Incentive）設計。
+- [x] **Task 092**: 高度T-Spin構造崩壊時（窒息・誤埋め）のペナルティ設計。
+- [x] **Task 093**: STSD検出エンジンのユニットテスト作成。
+- [x] **Task 094**: TSTおよびDT砲検出エンジンのユニットテスト作成。
+- [x] **Task 095**: 高度T-Spinパターンのベンチマーク評価検証。
+
+---
+
+### Category 5: T-Spin仕込み中間状態（Stepping Stone）多段階評価 (Task 096 - 115)
+
+- [x] **Task 096**: ステップ0: 「平坦な盤面に3マス幅の窪み候補地がある状態」の検知。
+- [x] **Task 097**: ステップ1（土台形成）: 「3×2の窪み＋片側壁があるが屋根がない状態（Base Only）」の加点。
+- [x] **Task 098**: ステップ2（屋根形成）: 「オーバーハングはあるが底面が未平坦な状態（Roof Only）」の加点。
+- [x] **Task 099**: ステップ3（1手リーチ / Ready TSD）: 「スロット・屋根・ノッチが完成しT待ちの状態」の極大加点。
+- [x] **Task 100**: ステップ4（2手準備 / Setup TSD）: 「あと1手でReady TSDになる手」への先行加点。
+- [x] **Task 101**: 階段状地形からのTスロット誘導ヒューリスティクスの実装。
+- [x] **Task 102**: 2段差窪みからのTスロット誘導ヒューリスティクスの実装。
+- [x] **Task 103**: 3段差窪み（TST候補地）からのTST誘導ヒューリスティクスの実装。
+- [x] **Task 104**: 盤面中央部（列3〜6）でのTスロット構築優先ブースト。
+- [x] **Task 105**: 盤面端部（列0〜1, 8〜9）での壁利用Tスロット構築優先ブースト。
+- [x] **Task 106**: 盤面全体の凹凸度（Bumpiness）とTスロット仕込みの両立性評価。
+- [x] **Task 107**: Tスロット開口部を塞ぐ危険手（Choke-point Move）の即時検出。
+- [x] **Task 108**: Choke-point Moveに対するペナルティ（`-50.0`）の実装。
+- [x] **Task 109**: 一時的閉塞（次手で即回収可能な蓋）と恒久閉塞（回収不能な窒息）の分離。
+- [x] **Task 110**: Tミノ以外の6種ミノによる「仕込み手（Setup Move）」の優先順位付け。
+- [x] **Task 111**: S/Zミノの横平置きによる土台フラット化手の評価。
+- [x] **Task 112**: J/Lミノの縦置きによる壁段差形成手の評価。
+- [x] **Task 113**: Iミノの横置きによる土台底上げ手の評価。
+- [x] **Task 114**: 中間状態評価関数の多段階スコアリングユニットテスト作成。
+- [x] **Task 115**: 仕込み手からReady TSDへの移行率ベンチマーク測定。
+
+---
+
+### Category 6: 3次元探索空間 BFS・ソフトドロップ・回転入れ物理エンジン (Task 116 - 140)
+
+- [x] **Task 116**: 3次元ノード `State { x: i8, y: i8, rot: u8 }` のメモリ効率的表現（ビットパック化）。
+- [x] **Task 117**: 訪問済みテーブル `visited[y][x][rot]` の高速ビットセット走査。
+- [x] **Task 118**: 左移動エッジ $(x-1, y, rot)$ の衝突判定とキュー追加。
+- [x] **Task 119**: 右移動エッジ $(x+1, y, rot)$ の衝突判定とキュー追加。
+- [x] **Task 120**: ソフトドロップエッジ $(x, y+1, rot)$ の衝突判定とキュー追加。
+- [x] **Task 121**: ハードドロップ（瞬時最下点落下）の着地点計算とソフトドロップとの分岐。
+- [x] **Task 122**: 時計回り回転エッジ（CW: $rot \rightarrow (rot+1)\%4$）のSRSキック展開。
+- [x] **Task 123**: 反時計回り回転エッジ（CCW: $rot \rightarrow (rot+3)\%4$）のSRSキック展開。
+- [x] **Task 124**: SRSオフセットテーブル（Test 1〜5）の順次評価と最短成功キックの採択。
+- [x] **Task 125**: キックインデックス4（第5テスト: $(\pm 1, \pm 2)$ / $(\pm 2, \pm 1)$）の追跡とT-Spin昇格フラグ保持。
+- [x] **Task 126**: 着地（Landing）判定: 下方向 $(x, y+1, rot)$ が衝突状態でかつ現在位置が有効なノードの抽出。
+- [x] **Task 127**: 屋根下潜り込み（Tuck）ノードの到達可能性保証。
+- [x] **Task 128**: 回転ねじり込み（Spin Insertion）ノードの到達可能性保証。
+- [x] **Task 129**: 着地直前アクションフラグ `was_rotate` の正確な記録（回転遷移直後の着地のみtrue）。
+- [x] **Task 130**: 直線落下（Hard Drop / Soft Drop直下）着地ノードの `was_rotate = false` 保証。
+- [x] **Task 131**: 探索キューの優先順位（幅優先 vs 最短手優先）の最適化。
+- [x] **Task 132**: スポーン位置衝突時の早期ゲームオーバー検知。
+- [x] **Task 133**: 非連結孤立ポケットへのワープ防止（Reachability厳格性検証）。
+- [x] **Task 134**: 1手あたり探索ノード数（平均200〜500ノード）の展開速度ベンチマーク（$< 0.1 \text{ms}$）。
+- [x] **Task 135**: BFS手生成におけるメモリ割り当てゼロ化（再利用バッファ化）。
+- [x] **Task 136**: Tミノの全回転入れパターン（TSD, TST, TSM, FIN, ISO）のBFS到達テスト作成。
+- [x] **Task 137**: Iミノの横滑り込み（I-Spin / Tuck）のBFS到達テスト作成。
+- [x] **Task 138**: S/Zミノの段差潜り込み（S-Spin / Z-Spin）のBFS到達テスト作成。
+- [x] **Task 139**: L/Jミノの壁際潜り込み（L-Spin / J-Spin）のBFS到達テスト作成。
+- [x] **Task 140**: 3次元BFS物理エンジンの包括的結合テスト。
+
+---
+
+### Category 7: 実機動作・GUIアニメーション・ソフトドロップ打鍵シーケンス (Task 141 - 155)
+
+- [x] **Task 141**: `run_ai_mode` における最短操作キーストローク（DAS, ARR, Soft Drop, Rotate, Hard Drop）の生成。
+- [x] **Task 142**: 屋根上横移動 $\rightarrow$ ソフトドロップ $\rightarrow$ 屋根下横スライド $\rightarrow$ 回転入れの打鍵シーケンス生成。
+- [x] **Task 143**: 通常着地時の「即時ハードドロップ」とT-Spin時の「ソフトドロップ＋回転入れ」の分岐制御。
+- [x] **Task 144**: T-Spin実行時のGUI描画フレームレート（30fps / 60fps）対応スピンアニメーション。
+- [x] **Task 145**: T-Spin成功時の画面エフェクト（"T-SPIN DOUBLE!", "B2B T-SPIN TRIPLE!"）のリアルタイム描画。
+- [x] **Task 146**: ロックディレイ（0.5秒）シミュレーションと接地後回転猶予の反映。
+- [x] **Task 147**: ハードドロップ誤爆（屋根上での誤ハードドロップによるスロット破壊）の完全防止。
+- [x] **Task 148**: 移動不能時のフェイルセーフ（最終到達可能ノードへのフォールバック）。
+- [x] **Task 149**: 対戦モード（VS Mode）におけるAI打鍵速度（PPS: Pieces Per Second）の制御（1.0〜10.0 PPS可変）。
+- [x] **Task 150**: AI対戦時の攻撃ライン送信アニメーションとゴミラインせり上がり描画。
+- [x] **Task 151**: キー入力マクロ（Finesse / 最適運指）準拠の打鍵数最小化。
+- [x] **Task 152**: T-Spinイベントレコーダー（前後5ターン盤面記録）のGUI連携。
+- [x] **Task 153**: 実機打鍵シミュレーションの単体テスト作成。
+- [x] **Task 154**: GUI描画と打鍵シーケンスの同期テスト。
+- [x] **Task 155**: 実機操作パイプラインの統合動作検証。
+
+---
+
+### Category 8: ミノ資源管理・NEXT/HOLD戦略・B2B連鎖制御 (Task 156 - 175)
+
+- [x] **Task 156**: `HoldT` 原則: 盤面にTスロットまたは仕込み地形がある際、TミノをHOLDへ退避する手の評価ブースト。
+- [x] **Task 157**: `WasteT` 原則: 有効Tスロット存在時のTミノ平積み・通常消去手に対する強烈な減点（`-40.0`）。
+- [x] **Task 158**: `HoldI` 原則: テトリス用IミノのHOLD温存評価。
+- [x] **Task 159**: `WasteI` 原則: 平坦盤面でのIミノ無駄消費に対するペナルティ。
+- [x] **Task 160**: NEXTキュー0番目（次ミノ）がTの時のTスロット完成手の加点。
+- [x] **Task 161**: NEXTキュー1〜2番目にTが存在する時の先行スロット仕込み加点。
+- [x] **Task 162**: NEXTキュー3〜5手先読みによるバッグ循環（7-bag cycle）予測。
+- [x] **Task 163**: B2B（Back-to-Back）状態フラグの保持とB2B攻撃力加算（+1ライン）。
+- [x] **Task 164**: B2B維持インセンティブ: TSD $\rightarrow$ Tetris $\rightarrow$ TSD の連鎖を継続する手の評価加点。
+- [x] **Task 165**: B2B破棄ペナルティ: B2B点灯中にSingle/Double/Triple通常消去でB2Bを切る手への減点。
+- [x] **Task 166**: REN（Combo）とT-Spinのハイブリッド評価（TSD始動REN）。
+- [x] **Task 167**: Perfect Clear（全消し / PC）とT-Spinの優先度動的切り替え。
+- [x] **Task 168**: 危険高度（盤面高さ $> 15$）時におけるT-Spin仕込み中止・緊急平積み掘りモードへの自動移行。
+- [x] **Task 169**: 安全高度（盤面高さ $< 8$）時における積極的T-Spin仕込みモードへの自動移行。
+- [x] **Task 170**: ゴミライン受け入れ時（Incoming Garbage）の即時TSDカウンター発火判断。
+- [x] **Task 171**: ミノ資源管理特徴量 $x_{19}$ (`FutureFit`) の計算精度向上。
+- [x] **Task 172**: ミノ資源管理ロジックの単体テスト作成。
+- [x] **Task 173**: B2B維持率のベンチマーク測定。
+- [x] **Task 174**: NEXTキュー連動シナジーの感度テスト。
+- [x] **Task 175**: リソースマネジメント統合動作検証。
+
+---
+
+### Category 9: GPU並列高速評価（ROCm HIP / Vulkan）と20次元特徴量結合 (Task 176 - 190)
+
+- [x] **Task 176**: 20次元正規化特徴量ベクトルの定義と値域 $[0.0, 1.0]$ の厳密な正規化。
+- [x] **Task 177**: 特徴量 $x_0$ (`TSpin`): TSD(1.0), TST(1.2), TSS(0.6), Mini(0.2) の厳密マッピング。
+- [x] **Task 178**: 特徴量 $x_1$ (`TSpinTerrain`): T-Slot完成度・屋根品質・中間状態スコアの統合。
+- [x] **Task 179**: 特徴量 $x_4$ (`PlacementQuality`): 屋根構築・ドネイト手の適合度統合。
+- [x] **Task 180**: 特徴量 $x_{18}$ (`Overhang`): Tスロット屋根免除済みオーバーハング量の算出。
+- [x] **Task 181**: 特徴量 $x_{19}$ (`FutureFit`): `HoldT` / `WasteT` / NEXTシナジーの統合。
+- [x] **Task 182**: GPU多項式カーネル（ROCm HIP `src/hip_kernel.cpp`）におけるT-Spin相互作用項（$x_0 \cdot x_{19}$, $x_1 \cdot x_4$）の高速計算。
+- [x] **Task 183**: Vulkan WGSLシェーダー（`src/gpu.rs`）におけるT-Spin相互作用項の並列評価。
+- [x] **Task 184**: GPU VRAM直接同期（`upload_weights_to_vram` / `readback_weights_from_vram`）のレイテンシ削減。
+- [x] **Task 185**: 深層ビームサーチ（Depth 3〜5, Width 30〜50）におけるGPUバッチ一括評価パイプライン。
+- [x] **Task 186**: TrustRate（深層探索信頼度減衰率: $0.90^k$）のGPU並列適用。
+- [x] **Task 187**: CPU-GPU間の非同期データ転送（Pinned Host Memory / Staging Buffer）の最適化。
+- [x] **Task 188**: GPU評価カーネルの出力整合性テスト（CPU評価結果との完全一致検証）。
+- [x] **Task 189**: GPUスループットベンチマーク（$> 20 \text{ M evals/sec}$）の測定。
+- [x] **Task 190**: GPU並列評価エンジンの統合テスト。
+
+---
+
+### Category 10: 測定・ベンチマーク・自己対戦・学習最適化 (Task 191 - 200)
+
+- [x] **Task 191**: T-Spinイベントレコーダーによる発生前後5ターン盤面スナップショットの自動保存（JSON & TXT）。
+- [x] **Task 192**: T-Spin種類別（TSD / TST / TSS / TSM）実戦発火回数および比率の自動集計。
+- [x] **Task 193**: T-Slot形成数および仕込み成功率の自動集計。
+- [x] **Task 194**: APM（Attack Per Minute: 送信段数/分）および火力の計測。
+- [x] **Task 195**: ミノ消費効率（Attack Per Piece: 1ミノあたりの平均火力）の計測。
+- [x] **Task 196**: 100反復 進化戦略（CMA-ES / GA）によるT-Spin特化評価重みの自己対戦自動学習。
+- [x] **Task 197**: 学習過程チェックポイント（`checkpoints/vram_model_iter_*.json`）の逐次保存と世代間性能比較。
+- [x] **Task 198**: 対戦シミュレーション（ゴミライン相殺・カウンターTSD・掘りドネイト）の自動評価。
+- [x] **Task 199**: `BENCHMARK_RESULTS.md` および `TSPIN_OPTIMIZATION.md` への最新検証データの自動レポート出力。
+- [x] **Task 200**: 全200タスク完了の総合回帰テストおよび最終性能確認。
+
+---
+
+## 3. 実装・検証ロードマップ
+
+```mermaid
+graph TD
+    A[Category 1: T-Slot幾何学検出 (Task 001-020)] --> B[Category 2: 7種ミノ屋根認識 (Task 021-045)]
+    B --> C[Category 3: Shiwehi流ドネーション (Task 046-070)]
+    C --> D[Category 4: 高度T-Spinパターン (Task 071-095)]
+    D --> E[Category 5: 仕込み多段階評価 (Task 096-115)]
+    
+    A --> F[Category 6: 3次元BFS物理・ソフトドロップ (Task 116-140)]
+    F --> G[Category 7: 実機打鍵・アニメーション (Task 141-155)]
+    
+    C --> H[Category 8: ミノ資源管理・NEXT/HOLD (Task 156-175)]
+    E --> I[Category 9: GPU並列評価・20特徴量 (Task 176-190)]
+    
+    G --> J[Category 10: 計測・学習最適化・対戦 (Task 191-200)]
+    H --> J
+    I --> J
 ```

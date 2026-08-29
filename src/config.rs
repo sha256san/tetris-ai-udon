@@ -31,6 +31,27 @@ pub mod heuristic {
     /// 1マスの埋まった穴（サイズ1のhole）が1箇所存在することに対するペナルティ（評価値）
     pub const ABANDONED_HOLE_PENALTY: f32 = -30.0;
 
+    /// T-Spin空打ち（0ライン消去）に対するペナルティ（評価値）
+    pub const EMPTY_TSPIN_PENALTY: f32 = -80.0;
+
+    /// 中央山型集中（富士山型）ペナルティ
+    pub const CENTER_CONVEXITY_PENALTY: f32 = -40.0;
+
+    /// 両端同時空き（Iミノ枯渇リスク）ペナルティ
+    pub const DUAL_SIDE_WELL_PENALTY: f32 = -100.0;
+
+    /// 内側（3〜8列目）単一列T-Spinスロット構築ボーナス
+    pub const INTERNAL_SINGLE_COLUMN_TSLOT_BONUS: f32 = 50.0;
+
+    /// 有効内向き壁端TST（T-Spin Triple）ボーナス
+    pub const VALID_WALL_TST_BONUS: f32 = 150.0;
+
+    /// 階段積み（Kaidan Setups）ドネイトボーナス
+    pub const KAIDAN_DONATE_BONUS: f32 = 45.0;
+
+    /// T-Spin Mini無駄打ちペナルティ（本命火力に繋がらない単発Miniの抑制）
+    pub const WASTED_TSPIN_MINI_PENALTY: f32 = -30.0;
+
     /// 先読みシミュレーションにおける将来スコアの割引率
     pub const LOOKAHEAD_DISCOUNT_FACTOR: f32 = 0.7;
 }

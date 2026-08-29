@@ -1,4 +1,4 @@
-use crate::tetris::{Game, BlockType};
+use crate::tetris::Game;
 use crate::ai::AiModel;
 use rand::Rng;
 use rayon::prelude::*;
@@ -35,10 +35,9 @@ pub fn evaluate_tspin_fitness(model: &AiModel, seeds: &[u64], max_pieces: usize)
         let mut btb_count = 0;
         let mut tsd_setups = 0;
         let mut pieces = 0;
-        let mut tspin_recorder = crate::tspin_recorder::TSpinRecorder::new();
 
         while !game.game_over && pieces < max_pieces {
-            let candidates = crate::ai::enumerate_all_moves_base(&game, model, None, 0);
+            let candidates = crate::ai::beam_search(&game, model, 2, 12, None, 0);
             if candidates.is_empty() {
                 break;
             }
@@ -48,21 +47,13 @@ pub fn evaluate_tspin_fitness(model: &AiModel, seeds: &[u64], max_pieces: usize)
                 game.hold();
             }
             game.current_piece.x = best.final_piece.x;
-            game.current_piece.rotation = best.final_piece.rotation;
             game.current_piece.y = best.final_piece.y;
-            if best.final_piece.block_type == BlockType::T {
-                game.last_action_was_rotate = true;
-            }
-            let placed_piece = game.current_piece.clone();
-            let prev_lines = game.lines_cleared;
+            game.current_piece.rotation = best.final_piece.rotation;
+            game.last_action_was_rotate = best.was_rotate;
             game.lock_piece();
             pieces += 1;
-            let cleared = game.lines_cleared - prev_lines;
 
-            let tspin_event = game.last_t_spin.clone();
-            tspin_recorder.record_turn(pieces as usize, &game, &placed_piece, cleared, tspin_event.clone());
-
-            if let Some(ref name) = tspin_event {
+            if let Some(ref name) = game.last_t_spin {
                 if name.contains("Double") {
                     tsd += 1;
                 } else if name.contains("Triple") {
@@ -79,7 +70,6 @@ pub fn evaluate_tspin_fitness(model: &AiModel, seeds: &[u64], max_pieces: usize)
                 tsd_setups += t_slots as u32;
             }
         }
-        tspin_recorder.flush_remaining();
 
         (tsd, tst, tss, game.lines_cleared, btb_count, tsd_setups)
     }).collect();
@@ -90,10 +80,10 @@ pub fn evaluate_tspin_fitness(model: &AiModel, seeds: &[u64], max_pieces: usize)
     let avg_tss = results.iter().map(|r| r.2 as f32).sum::<f32>() / n;
     let avg_lines = results.iter().map(|r| r.3 as f32).sum::<f32>() / n;
     let avg_btb = results.iter().map(|r| r.4 as f32).sum::<f32>() / n;
-    let avg_setups = results.iter().map(|r| r.5 as f32).sum::<f32>() / n;
 
-    // T-Spin & T-Slot 構築重視の Fitness 関数 (addplan.md 準拠)
-    let fitness = avg_tsd * 2500.0 + avg_tst * 3500.0 + avg_tss * 1000.0 + avg_setups * 150.0 + avg_btb * 120.0 + avg_lines * 25.0;
+    let total_tspins = avg_tsd + avg_tst + avg_tss;
+    // T-Spin (TST + TSD + TSS 合計 5回以上) 達成を最大化する Fitness 関数
+    let fitness = (avg_tsd * 8000.0) + (avg_tst * 12000.0) + (avg_tss * 3000.0) + (total_tspins * 4000.0) + (avg_lines * 50.0) + (avg_btb * 150.0);
     (fitness, avg_tsd, avg_tst, avg_tss, avg_lines)
 }
 
@@ -164,7 +154,7 @@ pub fn optimize_tspin_weights(iterations: usize) -> TSpinOptimizationResult {
     println!("========================================================\n");
 
     let eval_seeds = vec![42, 100, 777, 2026, 9999];
-    let max_pieces_per_game = 150;
+    let max_pieces_per_game = 220;
 
     let current_model = AiModel::new_20_feature_default();
 

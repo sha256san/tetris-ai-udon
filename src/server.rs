@@ -113,21 +113,32 @@ pub async fn start_server() {
         .fallback_service(ServeDir::new("templates"))
         .with_state(shared_state);
 
+    let mut port = 3000;
+    let listener = loop {
+        match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
+            Ok(l) => break l,
+            Err(_) if port < 3010 => port += 1,
+            Err(e) => {
+                eprintln!("サーバー起動エラー: ポートのバインドに失敗しました ({})", e);
+                return;
+            }
+        }
+    };
+
+    let url = format!("http://localhost:{}/battle/", port);
     println!("\n===========================================");
     println!("AI Battle Web Server running!");
     println!("Compute Engine: {}", crate::gpu::get_gpu_evaluator().get_info_string());
-    println!("Please open: http://localhost:3000/battle/");
+    println!("Please open: {}", url);
     println!("Press CTRL+C to exit.");
     println!("===========================================\n");
 
-    let url = "http://localhost:3000/battle/";
     let _ = std::process::Command::new("python3")
         .arg("-c")
         .arg(format!("import webbrowser; webbrowser.open('{}')", url))
         .status();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let _ = axum::serve(listener, app).await;
 }
 
 async fn get_state(State(state): State<Arc<Mutex<BattleState>>>) -> Json<BattleState> {

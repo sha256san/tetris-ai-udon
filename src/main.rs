@@ -10,6 +10,7 @@ mod hip;
 mod benchmark;
 mod tuning;
 pub mod tspin_recorder;
+pub mod knowledge;
 
 use std::fs::{self, File};
 use std::io::{stdout, Write};
@@ -68,9 +69,15 @@ impl Default for ActiveSearchConfig {
 fn main() -> std::io::Result<()> {
     let model = load_model_or_default();
 
-    // コマンドライン引数に --tune-tspin または -t がある場合は100回T-Spin最適化を実行
-    if std::env::args().any(|arg| arg == "--tune-tspin" || arg == "-t" || arg == "tune") {
-        let res = tuning::optimize_tspin_weights(100);
+    // コマンドライン引数に --tune-tspin または -t がある場合はT-Spin最適化を実行
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(idx) = args.iter().position(|arg| arg == "--tune-tspin" || arg == "-t" || arg == "tune") {
+        let iters = if idx + 1 < args.len() {
+            args[idx + 1].parse::<usize>().unwrap_or(1000)
+        } else {
+            1000
+        };
+        let res = tuning::optimize_tspin_weights(iters);
         let mut optimized_model = AiModel::new_20_feature_default();
         optimized_model.weights = res.best_weights.clone();
         save_model(&optimized_model)?;
@@ -97,7 +104,7 @@ fn main() -> std::io::Result<()> {
             2 => run_rl_mode(&mut model)?,
             3 => {
                 let _ = ui::restore_terminal();
-                let res = tuning::optimize_tspin_weights(100);
+                let res = tuning::optimize_tspin_weights(1000);
                 model.weights = res.best_weights;
                 save_model(&model)?;
                 println!("\nPress [Enter] to return to Tetris AI menu...");
@@ -364,8 +371,6 @@ fn run_ai_mode(
     let mut game = Game::new();
     let mut opening_turn: usize = 0;  // オープニングシーケンスの現在の手番
     let mut future_pieces = ai::simulate_future_moves(&game, &custom_model, opening, opening_turn);
-    let mut tspin_recorder = tspin_recorder::TSpinRecorder::new();
-    let mut turn_count = 0;
     ui::draw_game(&game, &custom_model, &future_pieces, &format!("AI Auto Play [{}]", search_config.name), None)?;
 
     let step_delay = Duration::from_millis(100);
@@ -415,57 +420,28 @@ fn run_ai_mode(
             std::thread::sleep(step_delay);
         }
 
-        // 1. 移動を試みる（壁やブロックにぶつかるまで）
-        let target_x = best_move.final_piece.x;
-        while game.current_piece.x != target_x {
-            let dx = if target_x > game.current_piece.x { 1 } else { -1 };
-            if !game.try_move(dx, 0) {
-                break; // 移動できない場合は一旦終了（後で回転後に再試行）
+        // 1. 到達経路アクション（横移動・ソフトドロップ・回転入れ）を順次実行してアニメーション描画
+        for action in &best_move.path {
+            match action {
+                crate::ai::MoveAction::MoveLeft => { game.try_move(-1, 0); }
+                crate::ai::MoveAction::MoveRight => { game.try_move(1, 0); }
+                crate::ai::MoveAction::SoftDrop => { game.try_move(0, 1); }
+                crate::ai::MoveAction::HardDrop => { game.hard_drop(); }
+                crate::ai::MoveAction::RotateCW => { game.try_rotate(RotationDirection::Clockwise); }
+                crate::ai::MoveAction::RotateCCW => { game.try_rotate(RotationDirection::CounterClockwise); }
             }
             ui::draw_game(&game, &custom_model, &future_pieces, "AI Auto Play", None)?;
-            std::thread::sleep(Duration::from_millis(30));
+            std::thread::sleep(Duration::from_millis(25));
         }
 
-        // 2. 回転を合わせるアニメーション
-        let target_rot = best_move.final_piece.rotation;
-        while game.current_piece.rotation != target_rot {
-            let old_rot = game.current_piece.rotation;
-            game.try_rotate(RotationDirection::Clockwise);
-            if game.current_piece.rotation == old_rot {
-                break; // 回転できなかった場合は無限ループ防止
-            }
-            ui::draw_game(&game, &custom_model, &future_pieces, "AI Auto Play", None)?;
-            std::thread::sleep(Duration::from_millis(30));
-        }
+        // 2. 最終着地位置・回転・回転フラグを確実に反映
+        game.current_piece.x = best_move.final_piece.x;
+        game.current_piece.y = best_move.final_piece.y;
+        game.current_piece.rotation = best_move.final_piece.rotation;
+        game.last_action_was_rotate = best_move.was_rotate;
 
-        // 3. 回転後にさらにXを合わせる（ウォールキック等でずれた場合の補正）
-        while game.current_piece.x != target_x {
-            let dx = if target_x > game.current_piece.x { 1 } else { -1 };
-            if !game.try_move(dx, 0) {
-                break;
-            }
-            ui::draw_game(&game, &custom_model, &future_pieces, "AI Auto Play", None)?;
-            std::thread::sleep(Duration::from_millis(30));
-        }
-
-        // 4. 万が一、最終位置・回転に到達できなかった場合のフェイルセーフ
-        if game.current_piece.x != target_x || game.current_piece.rotation != target_rot {
-            game.current_piece.x = target_x;
-            game.current_piece.rotation = target_rot;
-            ui::draw_game(&game, &custom_model, &future_pieces, "AI Auto Play", None)?;
-            std::thread::sleep(Duration::from_millis(30));
-        }
-
-        let prev_lines = game.lines_cleared;
-        let placed_piece = game.current_piece.clone();
-
-        // ハードドロップして固定
-        game.hard_drop();
-
-        turn_count += 1;
-        let cleared = game.lines_cleared.saturating_sub(prev_lines);
-        let tspin_event = game.last_t_spin.clone();
-        tspin_recorder.record_turn(turn_count, &game, &placed_piece, cleared, tspin_event);
+        // 3. ミノを固定しライン消去・T-Spin判定を実行
+        game.lock_piece();
 
         // オープニングシーケンスが有効な間はターンを進める
         if let Some(op) = opening {
@@ -483,8 +459,6 @@ fn run_ai_mode(
         ui::draw_game(&game, &custom_model, &future_pieces, "AI Auto Play", None)?;
         std::thread::sleep(step_delay);
     }
-
-    tspin_recorder.flush_remaining();
 
     Ok(())
 }

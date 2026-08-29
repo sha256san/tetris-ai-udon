@@ -143,6 +143,13 @@ impl Bag {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TSpinResult {
+    None,
+    Mini(usize),
+    Full(usize),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Game {
     pub board: Board,
@@ -154,6 +161,7 @@ pub struct Game {
     pub lines_cleared: u32,
     pub game_over: bool,
     pub last_action_was_rotate: bool,
+    pub last_rotate_used_srs_kick_5: bool,
     pub last_t_spin: Option<String>,
     pub btb: bool,
     pub pending_garbage: u32,
@@ -175,6 +183,7 @@ impl Game {
             lines_cleared: 0,
             game_over: false,
             last_action_was_rotate: false,
+            last_rotate_used_srs_kick_5: false,
             last_t_spin: None,
             btb: false,
             pending_garbage: 0,
@@ -204,6 +213,7 @@ impl Game {
             lines_cleared: 0,
             game_over: false,
             last_action_was_rotate: false,
+            last_rotate_used_srs_kick_5: false,
             last_t_spin: None,
             btb: false,
             pending_garbage: 0,
@@ -234,6 +244,7 @@ impl Game {
         if self.is_valid_position(&next_piece) {
             self.current_piece = next_piece;
             self.last_action_was_rotate = false;
+            self.last_rotate_used_srs_kick_5 = false;
             true
         } else {
             false
@@ -257,13 +268,14 @@ impl Game {
 
         // キックデータを試行
         let kick_offsets = self.get_kick_offsets(self.current_piece.block_type, from_rot, to_rot);
-        for &(dx, dy) in &kick_offsets {
+        for (kick_idx, &(dx, dy)) in kick_offsets.iter().enumerate() {
             let mut test_piece = next_piece.clone();
             test_piece.x += dx;
             test_piece.y += dy;
             if self.is_valid_position(&test_piece) {
                 self.current_piece = test_piece;
                 self.last_action_was_rotate = true;
+                self.last_rotate_used_srs_kick_5 = kick_idx == 4;
                 return true;
             }
         }
@@ -330,6 +342,7 @@ impl Game {
 
         self.hold_locked = true;
         self.last_action_was_rotate = false;
+        self.last_rotate_used_srs_kick_5 = false;
         
         // ホールド直後に衝突している場合は即座にゲームオーバー
         if !self.is_valid_position(&self.current_piece) {
@@ -342,6 +355,7 @@ impl Game {
     pub fn lock_piece(&mut self) {
         let is_t_piece = self.current_piece.block_type == BlockType::T;
         let was_rotate = self.last_action_was_rotate;
+        let used_srs_5 = self.last_rotate_used_srs_kick_5;
 
         for &(cx, cy) in &self.current_piece.get_cells() {
             if cx >= 0 && cx < BOARD_WIDTH as i32 && cy >= 0 && cy < INTERNAL_HEIGHT as i32 {
@@ -350,68 +364,66 @@ impl Game {
         }
 
         // T-spinの判定 (ライン消去の前に行う)
-        let mut is_t_spin = false;
-        if is_t_piece && was_rotate {
-            let cx = self.current_piece.x;
-            let cy = self.current_piece.y;
-            let corners = [
-                (cx - 1, cy - 1),
-                (cx + 1, cy - 1),
-                (cx - 1, cy + 1),
-                (cx + 1, cy + 1),
-            ];
-            let mut filled_corners = 0;
-            for &(x, y) in &corners {
-                if x < 0 || x >= BOARD_WIDTH as i32 || y < 0 || y >= INTERNAL_HEIGHT as i32 {
-                    filled_corners += 1;
-                } else if self.board[y as usize][x as usize].is_some() {
-                    filled_corners += 1;
-                }
-            }
-            if filled_corners >= 3 {
-                is_t_spin = true;
-            }
-        }
+        let t_spin_result = if is_t_piece {
+            check_t_spin_type(
+                &self.board,
+                &self.current_piece,
+                was_rotate,
+                used_srs_5,
+            )
+        } else {
+            TSpinResult::None
+        };
 
         // ライン消去
         let cleared = self.clear_lines();
         self.lines_cleared += cleared as u32;
 
-        if is_t_spin {
-            let (score_add, t_spin_name) = match cleared {
-                0 => (crate::config::game::TSPIN_0_SCORE, "T-Spin"),
-                1 => (crate::config::game::TSPIN_1_SCORE, "T-Spin Single"),
-                2 => (crate::config::game::TSPIN_2_SCORE, "T-Spin Double"),
-                3 => (crate::config::game::TSPIN_3_SCORE, "T-Spin Triple"),
-                _ => (0, "T-Spin"),
-            };
-            self.score += score_add;
-            self.last_t_spin = Some(t_spin_name.to_string());
-        } else {
-            if cleared < crate::config::game::LINE_CLEAR_SCORES.len() {
-                self.score += crate::config::game::LINE_CLEAR_SCORES[cleared];
-            }
-            self.last_t_spin = None;
-        }
-
-        // Damage Calculation
         let mut firepower = 0;
         let mut is_btb_eligible = false;
 
-        if is_t_spin {
-            match cleared {
-                1 => { firepower = 1; is_btb_eligible = true; } // TSS
-                2 => { firepower = 4; is_btb_eligible = true; } // TSD
-                3 => { firepower = 6; is_btb_eligible = true; } // TST
-                _ => {}
+        match t_spin_result {
+            TSpinResult::Full(_) => {
+                let (score_add, t_spin_name, fp) = match cleared {
+                    0 => (crate::config::game::TSPIN_0_SCORE, "T-Spin", 0),
+                    1 => (crate::config::game::TSPIN_1_SCORE, "T-Spin Single", 2),
+                    2 => (crate::config::game::TSPIN_2_SCORE, "T-Spin Double", 4),
+                    3 => (crate::config::game::TSPIN_3_SCORE, "T-Spin Triple", 6),
+                    _ => (0, "T-Spin", 0),
+                };
+                self.score += score_add;
+                self.last_t_spin = Some(t_spin_name.to_string());
+                firepower = fp;
+                if cleared > 0 {
+                    is_btb_eligible = true;
+                }
             }
-        } else {
-            match cleared {
-                1 => { firepower = 0; }
-                2 => { firepower = 1; }
-                3 => { firepower = 2; }
-                4 => { firepower = 4; is_btb_eligible = true; } // Tetris
-                _ => {}
+            TSpinResult::Mini(_) => {
+                let (score_add, t_spin_name, fp) = match cleared {
+                    0 => (100, "T-Spin Mini", 0),
+                    1 => (200, "T-Spin Mini Single", 0),
+                    2 => (400, "T-Spin Mini Double", 1),
+                    _ => (100, "T-Spin Mini", 0),
+                };
+                self.score += score_add;
+                self.last_t_spin = Some(t_spin_name.to_string());
+                firepower = fp;
+                if cleared > 0 {
+                    is_btb_eligible = true;
+                }
+            }
+            TSpinResult::None => {
+                if cleared < crate::config::game::LINE_CLEAR_SCORES.len() {
+                    self.score += crate::config::game::LINE_CLEAR_SCORES[cleared];
+                }
+                self.last_t_spin = None;
+                match cleared {
+                    1 => { firepower = 0; }
+                    2 => { firepower = 1; }
+                    3 => { firepower = 2; }
+                    4 => { firepower = 4; is_btb_eligible = true; } // Tetris
+                    _ => {}
+                }
             }
         }
 
@@ -582,6 +594,76 @@ pub fn get_well_bonus(board: &Board) -> u32 {
     }
 }
 
+/// Tetris Guideline に準拠した 3-Corner T-Spin / T-Spin Mini 判定
+pub fn check_t_spin_type(
+    board: &[[Option<BlockType>; BOARD_WIDTH]; INTERNAL_HEIGHT],
+    piece: &Piece,
+    was_rotate: bool,
+    used_srs_kick_5: bool,
+) -> TSpinResult {
+    if piece.block_type != BlockType::T || !was_rotate {
+        return TSpinResult::None;
+    }
+
+    let cx = piece.x;
+    let cy = piece.y;
+
+    // Tミノの回転に応じた「前側2隅 (Front 2 corners)」と「後側2隅 (Back 2 corners)」
+    let (front_coords, back_coords) = match piece.rotation {
+        0 => (
+            [(cx - 1, cy - 1), (cx + 1, cy - 1)], // 上向き凸: 左上, 右上
+            [(cx - 1, cy + 1), (cx + 1, cy + 1)], // 左下, 右下
+        ),
+        1 => (
+            [(cx + 1, cy - 1), (cx + 1, cy + 1)], // 右向き凸: 右上, 右下
+            [(cx - 1, cy - 1), (cx - 1, cy + 1)], // 左上, 左下
+        ),
+        2 => (
+            [(cx - 1, cy + 1), (cx + 1, cy + 1)], // 下向き凸: 左下, 右下
+            [(cx - 1, cy - 1), (cx + 1, cy - 1)], // 左上, 右上
+        ),
+        3 => (
+            [(cx - 1, cy - 1), (cx - 1, cy + 1)], // 左向き凸: 左上, 左下
+            [(cx + 1, cy - 1), (cx + 1, cy + 1)], // 右上, 右下
+        ),
+        _ => return TSpinResult::None,
+    };
+
+    let is_filled = |x: i32, y: i32| -> bool {
+        if x < 0 || x >= BOARD_WIDTH as i32 || y >= INTERNAL_HEIGHT as i32 {
+            true // 壁または床
+        } else if y < 0 {
+            false // 天井より上は空間
+        } else {
+            board[y as usize][x as usize].is_some()
+        }
+    };
+
+    let front_filled = front_coords.iter().filter(|&&(x, y)| is_filled(x, y)).count();
+    let back_filled = back_coords.iter().filter(|&&(x, y)| is_filled(x, y)).count();
+    let total_filled = front_filled + back_filled;
+
+    if total_filled < 3 {
+        return TSpinResult::None;
+    }
+
+    // 1. 前側2隅が両方埋まっている ＋ 後側が1つ以上埋まっている -> 本物 (Regular T-Spin)
+    if front_filled == 2 {
+        TSpinResult::Full(0)
+    } else if front_filled == 1 && back_filled == 2 {
+        // 2. 前側1隅 ＋ 後側2隅:
+        // SRSの第5テスト(TSTキック等の大キック)を使用した場合は Regular T-Spin に昇格
+        // それ以外は T-Spin Mini
+        if used_srs_kick_5 {
+            TSpinResult::Full(0)
+        } else {
+            TSpinResult::Mini(0)
+        }
+    } else {
+        TSpinResult::None
+    }
+}
+
 /// 盤面上の T-spin slot (T-slot) の個数をカウントする（壁際・全列対応）
 pub fn count_t_slots(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERNAL_HEIGHT]) -> usize {
     let mut count = 0;
@@ -664,17 +746,16 @@ pub fn count_t_slots(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERNAL_HEIGHT]
     count
 }
 
-/// T-spin地形品質（スロット完成度 + TD砲/TST複合構造 + スロット基礎凹み + コーナー支持）を 0.0 .. 1.0 で算出
+/// T-spin地形品質（スロット完成度 + STSD/TD砲/TST複合構造 + ドネイト + スロット基礎凹み + コーナー支持）を 0.0 .. 1.0 で算出
 pub fn evaluate_t_spin_terrain(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERNAL_HEIGHT]) -> f32 {
     let slots = count_t_slots(board);
     let mut max_quality = 0.0f32;
 
     if slots > 0 {
-        max_quality = (0.7 + (slots as f32) * 0.15).min(1.0);
+        max_quality = (0.75 + (slots as f32) * 0.15).min(1.0);
     }
 
-    // 1. TD砲 (Triple-Double Cannon / Trinity) 複合形状の検出 (HoikoCode TDHole / TDHint)
-    // 縦3マスの窪み(TST部)の上にTSD用屋根・土台が連鎖配置されている構造
+    // 1. TD砲 (Triple-Double Cannon) / DT Cannon 複合形状の検出 (HoikoCode TDHole / TDHint)
     for cy in 2..(INTERNAL_HEIGHT - 2) {
         for cx in 0..BOARD_WIDTH {
             // 壁際(cx=0, 1 または cx=BOARD_WIDTH-2, BOARD_WIDTH-1)のTST縦溝
@@ -682,7 +763,6 @@ pub fn evaluate_t_spin_terrain(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERN
                 && board[cy][cx].is_none() && board[cy + 1][cx].is_none() && board[cy + 2][cx].is_none()
                 && (cy + 3 >= INTERNAL_HEIGHT || board[cy + 3][cx].is_some())
             {
-                // 上部にオーバーハング屋根（TSDシェルフ）が存在するか
                 let has_td_shelf = if cx <= 1 {
                     cx + 1 < BOARD_WIDTH && board[cy][cx + 1].is_some() && board[cy - 1][cx + 1].is_none()
                 } else {
@@ -690,15 +770,49 @@ pub fn evaluate_t_spin_terrain(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERN
                 };
 
                 if has_td_shelf {
-                    max_quality = max_quality.max(0.95); // TD砲完成形に極大ボーナス
+                    max_quality = max_quality.max(0.98); // TD砲完成形
                 } else {
-                    max_quality = max_quality.max(0.75); // TST縦溝準備
+                    max_quality = max_quality.max(0.80); // TST縦溝準備
                 }
             }
         }
     }
 
-    // 2. TSD スロット基礎・仕込み中間地形（Stepping Stone）の走査
+    // 2. STSD (Super T-Spin Double: 2連TSD構造) の検出
+    for cy in 3..(INTERNAL_HEIGHT - 2) {
+        for cx in 1..(BOARD_WIDTH - 1) {
+            if board[cy][cx].is_none() && board[cy][cx - 1].is_none() && board[cy][cx + 1].is_none()
+                && (cy + 1 >= INTERNAL_HEIGHT || board[cy + 1][cx].is_none())
+            {
+                let has_stsd_roof = (board[cy - 1][cx - 1].is_some() && board[cy - 2][cx - 1].is_some())
+                    || (board[cy - 1][cx + 1].is_some() && board[cy - 2][cx + 1].is_some());
+                if has_stsd_roof {
+                    max_quality = max_quality.max(0.92);
+                }
+            }
+        }
+    }
+
+    // 3. Shiwehi式 ドネーション（1ミノ/2ミノ ドネイト）の検出
+    // 井戸（下穴）の上部2段を屋根ブロックで覆い、TSD発火後に下穴が再開口する構造
+    for cy in 2..(INTERNAL_HEIGHT - 3) {
+        for cx in 1..(BOARD_WIDTH - 1) {
+            if board[cy][cx].is_none() && board[cy][cx - 1].is_none() && board[cy][cx + 1].is_none() {
+                let roof_left = board[cy - 1][cx - 1].is_some();
+                let roof_right = board[cy - 1][cx + 1].is_some();
+                if roof_left ^ roof_right {
+                    let has_well_below = (cx > 0 && board[cy + 2][cx - 1].is_none())
+                        || board[cy + 2][cx].is_none()
+                        || (cx + 1 < BOARD_WIDTH && board[cy + 2][cx + 1].is_none());
+                    if has_well_below {
+                        max_quality = max_quality.max(0.85); // 有効ドネイト
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. TSD スロット基礎・仕込み中間地形（Stepping Stone）の走査
     for cy in 2..(INTERNAL_HEIGHT - 1) {
         for cx in 1..(BOARD_WIDTH - 1) {
             if board[cy][cx].is_none() && board[cy][cx - 1].is_none() && board[cy][cx + 1].is_none() {
@@ -709,16 +823,137 @@ pub fn evaluate_t_spin_terrain(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERN
                     let roof_left = cy >= 1 && board[cy - 1][cx - 1].is_some();
                     let roof_right = cy >= 1 && board[cy - 1][cx + 1].is_some();
                     if roof_left || roof_right {
-                        max_quality = max_quality.max(0.55);
+                        max_quality = max_quality.max(0.75); // 屋根付きReady TSD
                     } else {
-                        max_quality = max_quality.max(0.30);
+                        max_quality = max_quality.max(0.45); // 土台のみBase
                     }
                 }
             }
         }
     }
 
+    // 5. 階段積みドネイト (Kaidan Setups) パターンの加算
+    let kaidan_q = detect_kaidan_setup_patterns(board);
+    if kaidan_q > 0.0 {
+        max_quality = max_quality.max(kaidan_q);
+    }
+
     max_quality
+}
+
+/// 盤面中央列（x=3..6）の平均標高と両側（x=0..2, 7..9）の平均標高の差分を計測し、中央山型（富士山型）凸度を算出 (0.0..1.0)
+pub fn calculate_center_convexity(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERNAL_HEIGHT]) -> f32 {
+    let mut heights = [0usize; BOARD_WIDTH];
+    for x in 0..BOARD_WIDTH {
+        for y in 0..INTERNAL_HEIGHT {
+            if board[y][x].is_some() {
+                heights[x] = INTERNAL_HEIGHT - y;
+                break;
+            }
+        }
+    }
+
+    let center_avg = (heights[3] + heights[4] + heights[5] + heights[6]) as f32 / 4.0;
+    let sides_avg = (heights[0] + heights[1] + heights[2] + heights[7] + heights[8] + heights[9]) as f32 / 6.0;
+
+    if center_avg > sides_avg + 1.5 {
+        ((center_avg - (sides_avg + 1.5)) / 6.0).min(1.0)
+    } else {
+        0.0
+    }
+}
+
+/// 両端（x=0 と x=9）が同時に深さ2以上の縦穴になっている状態（Iミノ枯渇リスク）を検知
+pub fn detect_dual_side_wells(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERNAL_HEIGHT]) -> (bool, f32) {
+    let mut heights = [0usize; BOARD_WIDTH];
+    for x in 0..BOARD_WIDTH {
+        for y in 0..INTERNAL_HEIGHT {
+            if board[y][x].is_some() {
+                heights[x] = INTERNAL_HEIGHT - y;
+                break;
+            }
+        }
+    }
+
+    let depth_left = heights[1].saturating_sub(heights[0]);
+    let depth_right = heights[8].saturating_sub(heights[9]);
+
+    if depth_left >= 2 && depth_right >= 2 {
+        (true, ((depth_left + depth_right) as f32 / 8.0).min(1.0))
+    } else {
+        (false, 0.0)
+    }
+}
+
+/// Tスロットの位置（x座標）と穴の幅を評価 (2〜9列目、特に3〜8列目を高評価)
+pub fn evaluate_t_slot_column_position(x: usize, notch_width: usize) -> f32 {
+    if notch_width != 1 {
+        return 0.1; // 幅1マス以外の穴はT-Spin後に崩れるため低評価
+    }
+    match x {
+        2..=7 => 1.0,  // 最適: 3〜8列目の単一列穴
+        1 | 8 => 0.85, // 準推奨: 2列目、9列目
+        0 | 9 => 0.40, // 端スロットは減点
+        _ => 0.5,
+    }
+}
+
+/// 壁端（x=0 または x=9）における TST（T-Spin Triple）の屋根向きの物理的成立性を検証
+pub fn validate_wall_tst_orientation(
+    board: &[[Option<BlockType>; BOARD_WIDTH]; INTERNAL_HEIGHT],
+    tst_x: usize,
+    tst_y: usize,
+) -> (bool, f32) {
+    if tst_x == 0 {
+        // 左壁TST: 屋根は必ず盤面内側(x=1)から伸びる内向きである必要がある
+        let has_inner_roof = tst_y >= 2 && (board[tst_y - 1][1].is_some() || board[tst_y - 2][1].is_some());
+        let has_inner_peg = tst_y + 1 < INTERNAL_HEIGHT && board[tst_y + 1][1].is_some();
+        if has_inner_roof && has_inner_peg {
+            (true, 1.0)
+        } else {
+            (false, 0.0) // 空中(x=-1)に屋根を要求する不正配置
+        }
+    } else if tst_x == BOARD_WIDTH - 1 {
+        // 右壁TST: 屋根は必ず盤面内側(x=8)から伸びる内向きである必要がある
+        let has_inner_roof = tst_y >= 2 && (board[tst_y - 1][BOARD_WIDTH - 2].is_some() || board[tst_y - 2][BOARD_WIDTH - 2].is_some());
+        let has_inner_peg = tst_y + 1 < INTERNAL_HEIGHT && board[tst_y + 1][BOARD_WIDTH - 2].is_some();
+        if has_inner_roof && has_inner_peg {
+            (true, 1.0)
+        } else {
+            (false, 0.0)
+        }
+    } else {
+        // 内側TSTは物理的に成立可能
+        (true, 0.9)
+    }
+}
+
+/// しゑひ式「階段のドネイト (Kaidan Setups)」パターンを検出
+pub fn detect_kaidan_setup_patterns(board: &[[Option<BlockType>; BOARD_WIDTH]; INTERNAL_HEIGHT]) -> f32 {
+    let mut kaidan_quality = 0.0f32;
+    for cy in 1..(INTERNAL_HEIGHT - 1) {
+        for cx in 1..(BOARD_WIDTH - 2) {
+            // 階段状の段差 (高低差1マス)
+            let step_up_right = cy + 1 < INTERNAL_HEIGHT && board[cy + 1][cx].is_some() && board[cy][cx + 1].is_some() && board[cy + 1][cx + 1].is_some();
+            let step_up_left = cy + 1 < INTERNAL_HEIGHT && board[cy + 1][cx + 1].is_some() && board[cy][cx].is_some() && board[cy + 1][cx].is_some();
+
+            if step_up_right || step_up_left {
+                // ドネイトブロックによる屋根
+                let has_overhang = if step_up_right {
+                    board[cy.saturating_sub(1)][cx].is_none() && (cy >= 1 && board[cy - 1][cx + 1].is_some())
+                } else {
+                    board[cy.saturating_sub(1)][cx + 1].is_none() && (cy >= 1 && board[cy - 1][cx].is_some())
+                };
+
+                if has_overhang {
+                    // 内側列(x=2..7)であれば高評価
+                    let pos_bonus = if cx >= 2 && cx <= 6 { 1.0 } else { 0.8 };
+                    kaidan_quality = kaidan_quality.max(0.90 * pos_bonus);
+                }
+            }
+        }
+    }
+    kaidan_quality
 }
 
 #[cfg(test)]
@@ -830,29 +1065,48 @@ mod tests {
     }
 
     #[test]
-    fn test_t_spin_detection() {
+    fn test_t_spin_detection_full_and_mini() {
         let mut game = Game::new();
         game.board = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
         
         let cy = INTERNAL_HEIGHT - 2;
         let cx = 2;
         
-        // 3つのコーナーを埋める
-        game.board[cy - 1][cx - 1] = Some(BlockType::I); // 左上
-        game.board[cy - 1][cx + 1] = Some(BlockType::I); // 右上
-        game.board[cy + 1][cx - 1] = Some(BlockType::I); // 左下
+        // 1. T-Spin Mini: rotation 2 (pointing down), 1 front corner (Bottom-Left) + 2 back corners (Top-Left, Top-Right)
+        game.board[cy - 1][cx - 1] = Some(BlockType::I); // Top-Left (Back)
+        game.board[cy - 1][cx + 1] = Some(BlockType::I); // Top-Right (Back)
+        game.board[cy + 1][cx - 1] = Some(BlockType::I); // Bottom-Left (Front)
+        game.board[cy + 1][cx + 1] = None;               // Bottom-Right (Front) - empty
         
-        game.current_piece = Piece {
+        let mini_piece = Piece {
             block_type: BlockType::T,
             x: cx as i32,
             y: cy as i32,
             rotation: 2,
         };
         
-        game.last_action_was_rotate = true;
-        game.lock_piece();
-        
-        assert!(game.last_t_spin.is_some());
+        let mini_res = check_t_spin_type(&game.board, &mini_piece, true, false);
+        assert_eq!(mini_res, TSpinResult::Mini(0));
+
+        // 2. Full T-Spin: Both front corners filled (Bottom-Left, Bottom-Right) + 1 back corner (Top-Left)
+        game.board[cy + 1][cx + 1] = Some(BlockType::I); // Bottom-Right (Front) - filled!
+        let full_res = check_t_spin_type(&game.board, &mini_piece, true, false);
+        assert_eq!(full_res, TSpinResult::Full(0));
+
+        // 3. Non-T-Spin: was_rotate == false
+        let no_rotate_res = check_t_spin_type(&game.board, &mini_piece, false, false);
+        assert_eq!(no_rotate_res, TSpinResult::None);
+
+        // 4. Wall drop without rotation
+        let wall_game = Game::new();
+        let wall_piece = Piece {
+            block_type: BlockType::T,
+            x: 0,
+            y: 15,
+            rotation: 1,
+        };
+        let wall_res = check_t_spin_type(&wall_game.board, &wall_piece, false, false);
+        assert_eq!(wall_res, TSpinResult::None);
     }
 
     #[test]
@@ -899,5 +1153,140 @@ mod tests {
             let filled_count = game.board[y].iter().filter(|c| c.is_some()).count();
             assert_eq!(filled_count, BOARD_WIDTH - 1, "Garbage row should have exactly 9 blocks and 1 hole");
         }
+    }
+
+    #[test]
+    fn test_shiwehi_donations_and_stsd() {
+        // 1. Shiwehi S-Donate (階段のドネイト)
+        let mut board = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
+        let bottom = INTERNAL_HEIGHT - 1;
+        for y in (bottom - 3)..=bottom {
+            for x in 1..BOARD_WIDTH {
+                board[y][x] = Some(BlockType::I);
+            }
+        }
+        // Column 0 is the well (y = bottom-3..=bottom is empty at x=0)
+        // S-Donate forms an overhang at (x=1, y=bottom-2) creating a 3-wide T-slot at columns 0, 1, 2
+        board[bottom - 2][0] = None;
+        board[bottom - 1][0] = None;
+        board[bottom - 2][1] = Some(BlockType::S); // S-roof
+        board[bottom - 2][2] = None;               // Slot opening
+
+        let donation_quality = evaluate_t_spin_terrain(&board);
+        assert!(donation_quality >= 0.80, "Shiwehi S-Donate should yield >= 0.80 quality, got {}", donation_quality);
+
+        // 2. STSD (Super T-Spin Double)
+        let mut stsd_board = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
+        for y in (bottom - 4)..=bottom {
+            for x in 0..BOARD_WIDTH {
+                stsd_board[y][x] = Some(BlockType::I);
+            }
+        }
+        stsd_board[bottom - 1][4] = None;
+        stsd_board[bottom - 1][3] = None;
+        stsd_board[bottom - 1][5] = None;
+        stsd_board[bottom - 2][4] = None;
+        stsd_board[bottom - 2][3] = Some(BlockType::L); // STSD double roof
+        stsd_board[bottom - 3][3] = Some(BlockType::L);
+
+        let stsd_quality = evaluate_t_spin_terrain(&stsd_board);
+        assert!(stsd_quality >= 0.90, "STSD structure should yield >= 0.90 quality, got {}", stsd_quality);
+    }
+
+    #[test]
+    fn test_center_convexity_calculation() {
+        let mut board = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
+        let bottom = INTERNAL_HEIGHT - 1;
+
+        // 1. Flat terrain -> 0.0 convexity
+        for x in 0..BOARD_WIDTH {
+            board[bottom][x] = Some(BlockType::I);
+            board[bottom - 1][x] = Some(BlockType::I);
+        }
+        assert_eq!(calculate_center_convexity(&board), 0.0, "Flat terrain should have 0.0 convexity");
+
+        // 2. Central mountain (columns 3, 4, 5, 6 high, 0..2 and 7..9 low)
+        for y in (bottom - 5)..=(bottom - 2) {
+            board[y][3] = Some(BlockType::I);
+            board[y][4] = Some(BlockType::I);
+            board[y][5] = Some(BlockType::I);
+            board[y][6] = Some(BlockType::I);
+        }
+        let conv = calculate_center_convexity(&board);
+        assert!(conv > 0.3, "Central mountain should produce high convexity penalty, got {}", conv);
+    }
+
+    #[test]
+    fn test_dual_side_well_detection() {
+        let mut board = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
+        let bottom = INTERNAL_HEIGHT - 1;
+
+        // Columns 1..8 are 4 blocks high, columns 0 and 9 are 0 blocks high (both sides open!)
+        for y in (bottom - 3)..=bottom {
+            for x in 1..=8 {
+                board[y][x] = Some(BlockType::I);
+            }
+        }
+        let (is_dual, sev) = detect_dual_side_wells(&board);
+        assert!(is_dual, "Simultaneous deep wells on left (x=0) and right (x=9) must be flagged as dual side wells");
+        assert!(sev > 0.5, "Dual side well severity should be > 0.5, got {}", sev);
+
+        // Fill column 0 -> now only 1 well on column 9 (Single well is valid)
+        for y in (bottom - 3)..=bottom {
+            board[y][0] = Some(BlockType::I);
+        }
+        let (is_dual_single, _) = detect_dual_side_wells(&board);
+        assert!(!is_dual_single, "Single well on column 9 must NOT be flagged as dual side well");
+    }
+
+    #[test]
+    fn test_t_slot_column_position_rating() {
+        // 3〜8列目 (x=2..7): 最適 (1.0)
+        assert_eq!(evaluate_t_slot_column_position(2, 1), 1.0);
+        assert_eq!(evaluate_t_slot_column_position(5, 1), 1.0);
+        assert_eq!(evaluate_t_slot_column_position(7, 1), 1.0);
+
+        // 2列目 (x=1), 9列目 (x=8): 準推奨 (0.85)
+        assert_eq!(evaluate_t_slot_column_position(1, 1), 0.85);
+        assert_eq!(evaluate_t_slot_column_position(8, 1), 0.85);
+
+        // 1列目 (x=0), 10列目 (x=9): 端スロット減点 (0.40)
+        assert_eq!(evaluate_t_slot_column_position(0, 1), 0.40);
+        assert_eq!(evaluate_t_slot_column_position(9, 1), 0.40);
+    }
+
+    #[test]
+    fn test_wall_tst_orientation_valid_and_invalid() {
+        let mut board = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
+        let bottom = INTERNAL_HEIGHT - 1;
+
+        // 1. Left wall TST with inner roof at x=1 (VALID)
+        let tst_y = bottom - 2;
+        board[tst_y - 1][1] = Some(BlockType::L); // Inner roof
+        board[tst_y + 1][1] = Some(BlockType::L); // Lower peg
+        let (valid_left, q_left) = validate_wall_tst_orientation(&board, 0, tst_y);
+        assert!(valid_left, "Left wall TST with inner roof must be valid");
+        assert_eq!(q_left, 1.0);
+
+        // 2. Left wall TST with no inner roof (requires impossible floating roof outside board at x=-1) (INVALID)
+        let invalid_board = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
+        let (valid_invalid, _) = validate_wall_tst_orientation(&invalid_board, 0, tst_y);
+        assert!(!valid_invalid, "Left wall TST without inner roof must be INVALID");
+    }
+
+    #[test]
+    fn test_kaidan_setup_detection() {
+        let mut board = [[None; BOARD_WIDTH]; INTERNAL_HEIGHT];
+        let bottom = INTERNAL_HEIGHT - 1;
+
+        // Step up at column 3, 4 with roof at (x=4, y=bottom-2)
+        board[bottom][2] = Some(BlockType::I);
+        board[bottom][3] = Some(BlockType::I);
+        board[bottom][4] = Some(BlockType::I);
+        board[bottom - 1][4] = Some(BlockType::I);
+        board[bottom - 2][4] = Some(BlockType::S); // S-階段
+
+        let kaidan_q = detect_kaidan_setup_patterns(&board);
+        assert!(kaidan_q >= 0.70, "Kaidan setup should be detected with quality >= 0.70, got {}", kaidan_q);
     }
 }
