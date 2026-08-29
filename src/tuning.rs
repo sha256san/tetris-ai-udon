@@ -108,6 +108,7 @@ fn save_vram_checkpoint(
     avg_tst: f32,
     avg_tss: f32,
     avg_lines: f32,
+    worker_id: usize,
 ) {
     let hip = crate::hip::get_hip_evaluator();
     // 1. GPU VRAM に重みを転送
@@ -132,42 +133,70 @@ fn save_vram_checkpoint(
     };
 
     let _ = std::fs::create_dir_all("checkpoints");
-    let file_path = format!("checkpoints/vram_model_iter_{:03}.json", iter);
+    let file_path = if worker_id > 0 {
+        format!("checkpoints/worker_{}_vram_model_iter_{:04}.json", worker_id, iter)
+    } else {
+        format!("checkpoints/vram_model_iter_{:04}.json", iter)
+    };
     if let Ok(file) = std::fs::File::create(&file_path) {
         let writer = std::io::BufWriter::new(file);
         let _ = serde_json::to_writer_pretty(writer, &checkpoint);
     }
-    // 最新の VRAM チェックポイント
-    if let Ok(file) = std::fs::File::create("vram_weights_checkpoint.json") {
+    let latest_path = if worker_id > 0 {
+        format!("checkpoints/worker_{}_vram_checkpoint.json", worker_id)
+    } else {
+        "vram_weights_checkpoint.json".to_string()
+    };
+    if let Ok(file) = std::fs::File::create(&latest_path) {
         let writer = std::io::BufWriter::new(file);
         let _ = serde_json::to_writer_pretty(writer, &checkpoint);
     }
 }
 
-/// 100回の反復調整（CMA-ES / Evolutionary Optimization）により T-spin 特化の評価関数重みを自動作成
-pub fn optimize_tspin_weights(iterations: usize) -> TSpinOptimizationResult {
+/// 反復調整（CMA-ES / Evolutionary Optimization）により T-spin 特化の評価関数重みを自動作成
+pub fn optimize_tspin_weights(
+    iterations: usize,
+    initial_model: Option<&AiModel>,
+    worker_id: usize,
+) -> TSpinOptimizationResult {
     let iterations = if iterations == 0 { 100 } else { iterations };
+    let worker_tag = if worker_id > 0 {
+        format!("[Worker #{}] ", worker_id)
+    } else {
+        "".to_string()
+    };
+
     println!("\n========================================================");
-    println!("  T-Spin 特化 評価関数 {}回 最適化チューニング開始", iterations);
+    println!("  {}T-Spin 特化 評価関数 {}回 最適化チューニング開始", worker_tag, iterations);
     println!("  目標: TSD / TST / TSS の発生頻度およびT-slot構築力の最大化");
     println!("  GPU VRAM同期: 各イテレーションでVRAMメモリからデータを逐次保存");
     println!("========================================================\n");
 
-    let eval_seeds = vec![42, 100, 777, 2026, 9999];
+    let eval_seeds = vec![
+        42 + (worker_id as u64 * 1000),
+        100 + (worker_id as u64 * 1000),
+        777 + (worker_id as u64 * 1000),
+        2026 + (worker_id as u64 * 1000),
+        9999 + (worker_id as u64 * 1000),
+    ];
     let max_pieces_per_game = 220;
 
-    let current_model = AiModel::new_20_feature_default();
+    let current_model = if let Some(m) = initial_model {
+        m.clone()
+    } else {
+        AiModel::new_20_feature_default()
+    };
 
     let (initial_fitness, init_tsd, init_tst, init_tss, init_lines) =
         evaluate_tspin_fitness(&current_model, &eval_seeds, max_pieces_per_game);
 
     // 初期状態の VRAM チェックポイント保存
-    save_vram_checkpoint(0, &current_model.weights, initial_fitness, init_tsd, init_tst, init_tss, init_lines);
+    save_vram_checkpoint(0, &current_model.weights, initial_fitness, init_tsd, init_tst, init_tss, init_lines, worker_id);
 
     let gpu = crate::gpu::get_gpu_evaluator();
     let hip = crate::hip::get_hip_evaluator();
     let (free_b, total_b) = hip.get_vram_usage().unwrap_or((0, 0));
-    println!("初期状態 (Iteration 0):");
+    println!("{}初期状態 (Iteration 0):", worker_tag);
     println!("  Fitness: {:.1} | 平均 TSD: {:.2}回 | TST: {:.2}回 | TSS: {:.2}回 | 消去ライン: {:.1}行",
         initial_fitness, init_tsd, init_tst, init_tss, init_lines);
     println!("  [GPU Compute] Vulkan (wgpu): {}", gpu.get_info_string());
@@ -175,7 +204,12 @@ pub fn optimize_tspin_weights(iterations: usize) -> TSpinOptimizationResult {
         println!("  [VRAM Info  ] Free: {:.2} GB / Total: {:.2} GB (VRAM Synchronized)",
             free_b as f64 / 1e9, total_b as f64 / 1e9);
     }
-    println!("  [VRAM Dump  ] -> checkpoints/vram_model_iter_000.json 保存完了\n");
+    let dump_name = if worker_id > 0 {
+        format!("checkpoints/worker_{}_vram_model_iter_0000.json", worker_id)
+    } else {
+        "checkpoints/vram_model_iter_0000.json".to_string()
+    };
+    println!("  [VRAM Dump  ] -> {} 保存完了\n", dump_name);
 
     let mut best_weights = current_model.weights.clone();
     let mut best_fitness = initial_fitness;
@@ -211,10 +245,11 @@ pub fn optimize_tspin_weights(iterations: usize) -> TSpinOptimizationResult {
         candidate_model.weights = candidate_weights.clone();
 
         // 評価シード（ミニバッチ3シード）
+        let worker_offset = worker_id as u64 * 10007;
         let batch_seeds = [
-            iter as u64 * 31 + 7,
-            iter as u64 * 67 + 13,
-            iter as u64 * 101 + 97,
+            iter as u64 * 31 + worker_offset + 7,
+            iter as u64 * 67 + worker_offset + 13,
+            iter as u64 * 101 + worker_offset + 97,
         ];
 
         let (fit, _tsd, _tst, _tss, _lines) = evaluate_tspin_fitness(&candidate_model, &batch_seeds, max_pieces_per_game);
@@ -235,11 +270,11 @@ pub fn optimize_tspin_weights(iterations: usize) -> TSpinOptimizationResult {
 
         // 10イテレーション毎、または更新時に VRAM からデータを保存
         if iter % 10 == 0 || iter == iterations || updated {
-            save_vram_checkpoint(iter, &best_weights, best_fitness, best_tsd, best_tst, best_tss, best_lines);
+            save_vram_checkpoint(iter, &best_weights, best_fitness, best_tsd, best_tst, best_tss, best_lines, worker_id);
             if iter % 10 == 0 || iter == iterations {
                 println!(
-                    "Iteration {:3}/{} | Best Fitness: {:7.1} | TSD: {:.2}回 | TST: {:.2}回 | TSS: {:.2}回 | 消去: {:.1}行 | [VRAM Saved]",
-                    iter, iterations, best_fitness, best_tsd, best_tst, best_tss, best_lines
+                    "{}Iteration {:4}/{} | Best Fitness: {:7.1} | TSD: {:.2}回 | TST: {:.2}回 | TSS: {:.2}回 | 消去: {:.1}行 | [VRAM Saved]",
+                    worker_tag, iter, iterations, best_fitness, best_tsd, best_tst, best_tss, best_lines
                 );
             }
         }
@@ -256,11 +291,10 @@ pub fn optimize_tspin_weights(iterations: usize) -> TSpinOptimizationResult {
     }
 
     println!("\n========================================================");
-    println!("  {}回 最適化完了！", iterations);
+    println!("  {}{}回 最適化完了！", worker_tag, iterations);
     println!("  最適化前 Fitness: {:.1} -> 最適化後 Fitness: {:.1} (+{:.1}%)",
         initial_fitness, best_fitness, ((best_fitness - initial_fitness) / initial_fitness.max(1.0)) * 100.0);
     println!("  最適化後 平均TSD: {:.2}回 / ゲーム | 平均消去: {:.1}行", best_tsd, best_lines);
-    println!("  VRAMデータ出力先: checkpoints/vram_model_iter_*.json & vram_weights_checkpoint.json");
     println!("========================================================\n");
 
     TSpinOptimizationResult {

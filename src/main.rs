@@ -72,16 +72,50 @@ fn main() -> std::io::Result<()> {
     // コマンドライン引数に --tune-tspin または -t がある場合はT-Spin最適化を実行
     let args: Vec<String> = std::env::args().collect();
     if let Some(idx) = args.iter().position(|arg| arg == "--tune-tspin" || arg == "-t" || arg == "tune") {
-        let iters = if idx + 1 < args.len() {
+        let iters = if idx + 1 < args.len() && !args[idx + 1].starts_with('-') {
             args[idx + 1].parse::<usize>().unwrap_or(1000)
         } else {
             1000
         };
-        let res = tuning::optimize_tspin_weights(iters);
-        let mut optimized_model = AiModel::new_20_feature_default();
+
+        let worker_id = if let Some(w_idx) = args.iter().position(|a| a == "--worker" || a == "-w") {
+            if w_idx + 1 < args.len() {
+                args[w_idx + 1].parse::<usize>().unwrap_or(0)
+            } else { 0 }
+        } else { 0 };
+
+        let model_in_path = if let Some(in_idx) = args.iter().position(|a| a == "--model-in") {
+            if in_idx + 1 < args.len() { Some(&args[in_idx + 1]) } else { None }
+        } else { None };
+
+        let model_out_path = if let Some(out_idx) = args.iter().position(|a| a == "--model-out") {
+            if out_idx + 1 < args.len() { Some(&args[out_idx + 1]) } else { None }
+        } else { None };
+
+        let input_model = if let Some(path) = model_in_path {
+            if let Ok(file) = File::open(path) {
+                let reader = std::io::BufReader::new(file);
+                serde_json::from_reader(reader).unwrap_or_else(|_| model.clone())
+            } else {
+                model.clone()
+            }
+        } else {
+            model.clone()
+        };
+
+        let res = tuning::optimize_tspin_weights(iters, Some(&input_model), worker_id);
+        let mut optimized_model = input_model;
         optimized_model.weights = res.best_weights.clone();
-        save_model(&optimized_model)?;
-        println!("最適化済みモデルを {} に保存しました！", MODEL_PATH);
+
+        let save_target = model_out_path.map(|s| s.as_str()).unwrap_or(MODEL_PATH);
+        if let Ok(file) = File::create(save_target) {
+            let writer = std::io::BufWriter::new(file);
+            let _ = serde_json::to_writer_pretty(writer, &optimized_model);
+            println!("最適化済みモデルを {} に保存しました！", save_target);
+        } else {
+            save_model(&optimized_model)?;
+            println!("最適化済みモデルを {} に保存しました！", MODEL_PATH);
+        }
         return Ok(());
     }
 
@@ -104,7 +138,7 @@ fn main() -> std::io::Result<()> {
             2 => run_rl_mode(&mut model)?,
             3 => {
                 let _ = ui::restore_terminal();
-                let res = tuning::optimize_tspin_weights(1000);
+                let res = tuning::optimize_tspin_weights(1000, Some(&model), 0);
                 model.weights = res.best_weights;
                 save_model(&model)?;
                 println!("\nPress [Enter] to return to Tetris AI menu...");

@@ -1264,7 +1264,7 @@ dependencies = [
 
 [[package]]
 name = "tetris_ai"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "axum",
  "bytemuck",
