@@ -9,27 +9,34 @@ set -m # Enable job control
 ITERS=${1:-10000}
 WORKERS=4
 ROUND=1
+PID_FILE=".training_pids"
 
 mkdir -p logs checkpoints
+
+# Save main script PID
+echo "$$" > "$PID_FILE"
 
 echo "================================================================="
 echo "       TETRIS AI 4-WORKER PARALLEL TUNING BATCH RUNNER"
 echo "  Workers: $WORKERS parallel instances"
 echo "  Iterations per Worker per Round: $ITERS"
 echo "  Auto Best Model Sync: Yes (Highest Fitness -> model.json)"
+echo "  Auto Loop across Rounds: Yes (Round 1 -> Round 2 -> Round 3 ...)"
+echo "  Stop command: ./stop_parallel_training.sh or Ctrl+C"
 echo "================================================================="
 
 # Trap Ctrl+C (SIGINT) to kill all background workers cleanly
 cleanup() {
     echo -e "\n\n[Interrupt received] Terminating all background workers..."
+    rm -f "$PID_FILE"
     kill -- -$$ 2>/dev/null
     exit 0
 }
-trap cleanup SIGINT SIGTERM
+trap cleanup SIGINT SIGTERM EXIT
 
 # 1. Build release binary first
 echo "[Build] Compiling release binary with optimized GPU/HIP shaders..."
-cargo build --release || { echo "[Error] Build failed!"; exit 1; }
+cargo build --release || { echo "[Error] Build failed!"; rm -f "$PID_FILE"; exit 1; }
 
 while true; do
     echo ""
@@ -40,18 +47,20 @@ while true; do
 
     PIDS=()
     for ((i=1; i<=WORKERS; i++)); do
-        echo "  [Worker #$i] Launching 10,000 iters in background (log -> logs/worker_$i.log)..."
+        echo "  [Worker #$i] Launching $ITERS iters in background (log -> logs/worker_$i.log)..."
         ./target/release/tetris_ai \
             --tune-tspin "$ITERS" \
             --model-in model.json \
             --model-out "checkpoints/worker_${i}_best.json" \
             --worker "$i" > "logs/worker_$i.log" 2>&1 &
-        PIDS+=($!)
+        pid=$!
+        PIDS+=($pid)
+        echo "$pid" >> "$PID_FILE"
     done
 
     echo ""
     echo "  ⚡ All $WORKERS Workers running in parallel (PIDs: ${PIDS[*]})"
-    echo "  Monitoring progress... (Press Ctrl+C anytime to stop)"
+    echo "  Monitoring progress... (Press Ctrl+C or run ./stop_parallel_training.sh to stop)"
     echo ""
 
     # Live progress loop
@@ -91,7 +100,7 @@ while true; do
     echo "================================================================="
     echo "  ✅ Round #$ROUND finished successfully!"
     echo "  model.json updated with best weights."
-    echo "  Proceeding to Round #$((ROUND + 1)) in 3 seconds..."
+    echo "  🚀 Automatically proceeding to Round #$((ROUND + 1)) in 3 seconds..."
     echo "================================================================="
     sleep 3
     ((ROUND++))
