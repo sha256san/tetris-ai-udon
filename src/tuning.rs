@@ -287,6 +287,9 @@ pub fn optimize_tspin_weights(
                 avg_total_tspins: best_tsd + best_tst + best_tss,
                 avg_lines: best_lines,
             });
+            if history.len() > 50 {
+                history.remove(0);
+            }
         }
     }
 

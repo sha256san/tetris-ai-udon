@@ -84,6 +84,11 @@ fn main() -> std::io::Result<()> {
             } else { 0 }
         } else { 0 };
 
+        if worker_id > 0 {
+            // マルチワーカー並列実行時の過剰メモリ消費・スレッド競合を防ぐため各プロセス2スレッドに制限
+            let _ = rayon::ThreadPoolBuilder::new().num_threads(2).build_global();
+        }
+
         let model_in_path = if let Some(in_idx) = args.iter().position(|a| a == "--model-in") {
             if in_idx + 1 < args.len() { Some(&args[in_idx + 1]) } else { None }
         } else { None };

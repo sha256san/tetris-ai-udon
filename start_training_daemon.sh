@@ -11,6 +11,11 @@ ITERS=${1:-500}
 LOG_FILE="logs/training_runner.log"
 PID_FILE=".training_daemon_pid"
 
+# Optimize glibc memory management & CPU threads to prevent memory buildup
+export RAYON_NUM_THREADS=2
+export MALLOC_TRIM_THRESHOLD_=131072
+export MALLOC_MMAP_THRESHOLD_=131072
+
 mkdir -p logs checkpoints
 
 # 1. Check if already running

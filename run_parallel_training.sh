@@ -13,6 +13,11 @@ WORKERS=4
 ROUND=1
 PID_FILE=".training_pids"
 
+# Optimize glibc memory management & CPU threads to prevent memory buildup
+export RAYON_NUM_THREADS=2
+export MALLOC_TRIM_THRESHOLD_=131072
+export MALLOC_MMAP_THRESHOLD_=131072
+
 mkdir -p logs checkpoints
 
 # Save main script PID
