@@ -1,16 +1,16 @@
 #!/bin/bash
 # ==============================================================================
-# 4-Worker Parallel Tuning Batch Runner
+# 2-Worker Parallel Tuning Batch Runner
 # Usage: ./run_parallel_training.sh [ITERS_PER_ROUND] [REPEAT_ROUNDS]
 # Examples:
-#   ./run_parallel_training.sh 100 5    # 100 iters x 4 workers, repeated 5 rounds (Total: 2,000 games)
-#   ./run_parallel_training.sh 500 10   # 500 iters x 4 workers, repeated 10 rounds (Total: 20,000 games)
-#   ./run_parallel_training.sh 100      # 100 iters x 4 workers, repeated endlessly (0 = infinite)
+#   ./run_parallel_training.sh 100 5    # 100 iters x 2 workers, repeated 5 rounds (Total: 1,000 games)
+#   ./run_parallel_training.sh 500 10   # 500 iters x 2 workers, repeated 10 rounds (Total: 10,000 games)
+#   ./run_parallel_training.sh 100      # 100 iters x 2 workers, repeated endlessly (0 = infinite)
 # ==============================================================================
 
 ITERS=${1:-500}
 MAX_ROUNDS=${2:-0} # 0 means infinite loop
-WORKERS=4
+WORKERS=2
 ROUND=1
 PID_FILE=".training_pids"
 
@@ -25,7 +25,7 @@ mkdir -p logs checkpoints
 echo "$$" > "$PID_FILE"
 
 echo "================================================================="
-echo "       TETRIS AI 4-WORKER PARALLEL TUNING BATCH RUNNER"
+echo "       TETRIS AI 2-WORKER PARALLEL TUNING BATCH RUNNER"
 echo "  Workers: $WORKERS parallel instances"
 echo "  Iterations per Worker per Round: $ITERS"
 echo "  Total Games per Round: $((WORKERS * ITERS))"
@@ -122,10 +122,10 @@ while true; do
 
     echo ""
     echo "[Complete] All $WORKERS workers finished Round #$ROUND ($((WORKERS * ITERS)) total iterations)!"
-    echo "[Memory] All 4 worker processes terminated. Heap memory 100% reclaimed by OS."
+    echo "[Memory] All $WORKERS worker processes terminated. Heap memory 100% reclaimed by OS."
 
     # Evaluate best model and promote to model.json
-    python3 scripts/merge_best_worker.py
+    python3 scripts/merge_best_worker.py "$WORKERS"
 
     echo "================================================================="
     echo "  ✅ Round #$ROUND finished successfully!"

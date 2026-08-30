@@ -10,7 +10,7 @@ from datetime import datetime
 
 CHECKPOINT_DIR = "checkpoints"
 MODEL_PATH = "model.json"
-WORKER_COUNT = 4
+DEFAULT_WORKER_COUNT = 2
 
 def load_worker_result(worker_id: int):
     # Try latest checkpoint from worker
@@ -56,17 +56,24 @@ def load_worker_result(worker_id: int):
     }
 
 def main():
+    worker_count = DEFAULT_WORKER_COUNT
+    if len(sys.argv) > 1:
+        try:
+            worker_count = int(sys.argv[1])
+        except ValueError:
+            worker_count = DEFAULT_WORKER_COUNT
+
     print("\n" + "=" * 70)
-    print(f"  [4-Worker Parallel Tuning Round Evaluation : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
+    print(f"  [{worker_count}-Worker Parallel Tuning Round Evaluation : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
     print("=" * 70)
 
     workers = []
-    for wid in range(1, WORKER_COUNT + 1):
+    for wid in range(1, worker_count + 1):
         info = load_worker_result(wid)
         workers.append(info)
 
-    # Sort by fitness descending
-    valid_workers = [w for w in workers if w["weights"] and len(w["weights"]) == 20]
+    # Sort by fitness descending (support 20 or 25 features)
+    valid_workers = [w for w in workers if w["weights"] and len(w["weights"]) in (20, 25)]
     if not valid_workers:
         print("[Error] No valid worker models found in checkpoints/!")
         sys.exit(1)

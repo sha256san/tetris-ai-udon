@@ -40,10 +40,10 @@ cargo build --release || { echo "[Error] Build failed!"; exit 1; }
 echo ""
 echo "================================================================="
 echo "  🚀 Starting Tetris AI Parallel Training Daemon"
-echo "  Workers: 4 parallel instances"
+echo "  Workers: 2 parallel instances"
 echo "  Iterations per Worker per Round: $ITERS"
 if [ "$MAX_ROUNDS" -gt 0 ]; then
-echo "  Repeat Count: $MAX_ROUNDS rounds (Total Games: $((4 * ITERS * MAX_ROUNDS)))"
+echo "  Repeat Count: $MAX_ROUNDS rounds (Total Games: $((2 * ITERS * MAX_ROUNDS)))"
 else
 echo "  Repeat Count: Endless Loop (until ./stop_parallel_training.sh)"
 fi
