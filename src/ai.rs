@@ -58,6 +58,41 @@ impl AiModel {
         }
     }
 
+    /// addplan6.md に準拠した25特徴量の低層維持・危険高度抑制ハイブリッド非線形評価モデル
+    pub fn new_25_feature_default() -> Self {
+        AiModel {
+            weights: vec![
+                205.67,  // x0: TSpinScore (TSD: 1.0, TST: 1.2, TSS: 0.6)
+                130.57,  // x1: TSpinTerrain (T-slots, TD cannon, STSD)
+                -89.30,  // x2: HolePenalty (Buried holes)
+                -30.00,  // x3: HoleDepthSum (Deep buried holes penalty)
+                -36.31,  // x4: HoleSpreadPenalty (Hole dispersion)
+                33.13,   // x5: PlacementQuality (Roof formation & donation quality)
+                116.61,  // x6: TetrisScore (4-line clears)
+                -9.20,   // x7: PureSingle (Single without REN/T-spin)
+                -15.26,  // x8: PureDouble (Double without REN/T-spin)
+                -12.35,  // x9: PureTriple (Triple without REN/T-spin)
+                46.66,   // x10: RenScore (Combo chaining)
+                33.77,   // x11: BtbScore (Back-to-Back status)
+                5.60,    // x12: MaxCombo
+                30.16,   // x13: MeanCombo
+                99.75,   // x14: Perfect Clear (PC)
+                -44.17,  // x15: AggregateHeight (Aggregate height)
+                -58.48,  // x16: MaxHeightPenalty (Max column height)
+                -26.00,  // x17: HeightVariance (Column height variance penalty)
+                -75.00,  // x18: HeightRisk (Exponential penalty for height > 10)
+                40.00,   // x19: LowFlatBonus (Bonus for keeping field <= 6 high)
+                -26.82,  // x20: BumpinessPenalty (Height differences + center mountain)
+                25.00,   // x21: SurfaceFlatness (Smooth top surface bonus)
+                17.86,   // x22: WellQuality (Gaussian well depth bonus)
+                -25.78,  // x23: OverhangPenalty (Floating blocks)
+                45.44,   // x24: FutureFitScore (Next queue & Hold piece compatibility)
+            ],
+            is_nonlinear: true,
+            backend: Some(GpuBackendSelection::Auto),
+        }
+    }
+
     // 評価値を計算（高いほど良い）
     #[allow(dead_code)]
     pub fn evaluate(&self, features: &[f32]) -> f32 {
@@ -444,6 +479,278 @@ pub fn extract_20_features(
         height_penalty,
         max_height_penalty,
         bumpiness_penalty,
+        well_quality,
+        overhang_penalty,
+        future_fit,
+    ]
+}
+
+/// 25特徴量モデル抽出関数（低層平坦維持・危険高度急増抑制・穴深度・分散抑制）
+pub fn extract_25_features(
+    game: &Game,
+    board_after_clear: &Board,
+    cleared_lines: usize,
+    placed_piece: &Piece,
+    use_hold: bool,
+    was_rotate: bool,
+) -> Vec<f32> {
+    let mut heights = [0; BOARD_WIDTH];
+    for x in 0..BOARD_WIDTH {
+        for y in 0..INTERNAL_HEIGHT {
+            if board_after_clear[y][x].is_some() {
+                heights[x] = (INTERNAL_HEIGHT - y) as i32;
+                break;
+            }
+        }
+    }
+
+    let max_h = *heights.iter().max().unwrap_or(&0) as f32;
+    let sum_h: i32 = heights.iter().sum();
+
+    // 1. TSpin (0.0..1.2) - Guideline 3-Corner 判定に準拠
+    let t_spin_result = if placed_piece.block_type == BlockType::T {
+        crate::tetris::check_t_spin_type(
+            &game.board,
+            placed_piece,
+            was_rotate,
+            false,
+        )
+    } else {
+        crate::tetris::TSpinResult::None
+    };
+
+    let t_spin_score = match t_spin_result {
+        crate::tetris::TSpinResult::Full(_) => match cleared_lines {
+            0 => 0.0,  // 空打ちは0点
+            1 => 0.60, // TSS
+            2 => 1.00, // TSD (最大目標)
+            3 => 1.20, // TST
+            _ => 0.0,
+        },
+        crate::tetris::TSpinResult::Mini(_) => match cleared_lines {
+            0 => 0.0,
+            1 => 0.20, // Mini Single
+            2 => 0.40, // Mini Double
+            _ => 0.0,
+        },
+        crate::tetris::TSpinResult::None => 0.0,
+    };
+
+    // 2. TSpinTerrain (T-slots, corner support, depth, overhang, internal position & kaidan)
+    let t_slot_count = crate::tetris::count_t_slots(board_after_clear) as f32;
+    let mut t_spin_terrain = crate::tetris::evaluate_t_spin_terrain(board_after_clear);
+    let next_has_t = game.hold_piece == Some(BlockType::T) || game.bag.peek_next(4).contains(&BlockType::T);
+    if next_has_t && t_spin_terrain > 0.3 {
+        t_spin_terrain = (t_spin_terrain + 0.3).min(1.0);
+    }
+    // 壁端の背面TST検出時は TSpinTerrain を大幅減点
+    let is_reverse_wall_tst = crate::tetris::detect_reverse_wall_tst(&game.board, placed_piece, was_rotate);
+    if is_reverse_wall_tst {
+        t_spin_terrain = (t_spin_terrain - 0.7).max(0.0);
+    }
+    let slot_pos_quality = crate::tetris::evaluate_t_slot_column_position(placed_piece.x.clamp(0, 9) as usize, 1);
+    if t_spin_terrain > 0.3 {
+        t_spin_terrain = (t_spin_terrain * 0.8 + slot_pos_quality * 0.2).min(1.0);
+    }
+
+    // 3. Holes & Blocks Above & 4. HoleDepthSum
+    let mut holes = 0;
+    let mut col_holes = [0; BOARD_WIDTH];
+    let mut hole_coords: Vec<(usize, usize)> = Vec::new();
+    let mut blocks_above = 0;
+    let mut total_hole_depth = 0;
+
+    for x in 0..BOARD_WIDTH {
+        let mut block_found = false;
+        let mut count_above = 0;
+        for y in 0..INTERNAL_HEIGHT {
+            if board_after_clear[y][x].is_some() {
+                block_found = true;
+                count_above += 1;
+            } else if block_found {
+                holes += 1;
+                col_holes[x] += 1;
+                hole_coords.push((x, y));
+                blocks_above += count_above;
+                // 列頂点から穴までの深さ
+                let hole_depth = heights[x] - (INTERNAL_HEIGHT - y) as i32 + 1;
+                total_hole_depth += hole_depth.max(1);
+            }
+        }
+    }
+    let hole_penalty = ((holes as f32 * 1.0 + blocks_above as f32 * 0.5) / 10.0).min(1.0);
+    let hole_depth_sum_penalty = (total_hole_depth as f32 / 40.0).min(1.0);
+
+    // 5. Hole Spread Penalty (列分散 + 穴間マンハッタン距離)
+    let mean_h_per_col = holes as f32 / BOARD_WIDTH as f32;
+    let variance = col_holes.iter().map(|&h| (h as f32 - mean_h_per_col).powi(2)).sum::<f32>() / BOARD_WIDTH as f32;
+    let mut spread_dist = 0.0f32;
+    let mut pairs = 0;
+    for i in 0..hole_coords.len() {
+        for j in (i + 1)..hole_coords.len() {
+            let dx = (hole_coords[i].0 as i32 - hole_coords[j].0 as i32).abs() as f32;
+            let dy = (hole_coords[i].1 as i32 - hole_coords[j].1 as i32).abs() as f32;
+            spread_dist += dx + dy;
+            pairs += 1;
+        }
+    }
+    let mean_spread = if pairs > 0 { spread_dist / pairs as f32 } else { 0.0 };
+    let hole_spread_penalty = ((variance * 0.5 + mean_spread * 0.5) / 10.0).min(1.0);
+
+    // 6. Placement Quality (着地位置の適合度 & 屋根構築・ドネイト判定)
+    let is_empty_tspin = placed_piece.block_type == BlockType::T && t_spin_result != crate::tetris::TSpinResult::None && cleared_lines == 0;
+    let is_roof_formation = placed_piece.block_type != BlockType::T && {
+        let mut creates_roof = false;
+        for &(cx, cy) in &placed_piece.get_cells() {
+            if cy + 1 < INTERNAL_HEIGHT as i32 && cx >= 0 && cx < BOARD_WIDTH as i32 {
+                if game.board[(cy + 1) as usize][cx as usize].is_none() {
+                    creates_roof = true;
+                    break;
+                }
+            }
+        }
+        creates_roof
+    };
+
+    let buried_holes_under_donation = if is_roof_formation {
+        crate::tetris::count_buried_holes_under_donation(&game.board, placed_piece)
+    } else {
+        0
+    };
+
+    let placement_quality = if is_reverse_wall_tst {
+        0.02f32
+    } else if is_empty_tspin {
+        0.05f32
+    } else if t_spin_score > 0.0 {
+        1.0f32
+    } else if is_roof_formation && t_spin_terrain > 0.3 {
+        if buried_holes_under_donation > 0 {
+            (1.0f32 - (buried_holes_under_donation as f32 * 0.20)).max(0.30)
+        } else {
+            1.0f32
+        }
+    } else if placed_piece.y >= (INTERNAL_HEIGHT as i32 - 6) {
+        0.85f32
+    } else {
+        0.50f32
+    };
+
+    // 7. Tetris (4-line clear)
+    let tetris_score = if cleared_lines == 4 { 1.0 } else { 0.0 };
+
+    // 8, 9, 10. Pure Single, Double, Triple
+    let is_tspin_or_ren = game.last_t_spin.is_some() || game.btb;
+    let pure_single = if cleared_lines == 1 && !is_tspin_or_ren { 1.0 } else { 0.0 };
+    let pure_double = if cleared_lines == 2 && !is_tspin_or_ren { 1.0 } else { 0.0 };
+    let pure_triple = if cleared_lines == 3 && !is_tspin_or_ren { 1.0 } else { 0.0 };
+
+    // 11. REN (Combo)
+    let ren_score = 0.0f32;
+    // 12. BTB
+    let btb_score = if game.btb { 1.0 } else { 0.0 };
+    // 13. MaxCombo, 14. MeanCombo
+    let max_combo = 0.0f32;
+    let mean_combo = 0.0f32;
+
+    // 15. Perfect Clear
+    let is_pc = board_after_clear.iter().all(|row| row.iter().all(|c| c.is_none()));
+    let pc_score = if is_pc { 1.0 } else { 0.0 };
+
+    // 16. Aggregate Height Penalty
+    let aggregate_height = (sum_h as f32 / (BOARD_WIDTH * 15) as f32).min(1.0);
+
+    // 17. Max Height Penalty
+    let max_height_penalty = (max_h / 20.0).min(1.0);
+
+    // 18. Height Variance Penalty (列高さの分散: 偏った山や深い谷を抑制)
+    let mean_h = sum_h as f32 / BOARD_WIDTH as f32;
+    let height_var = heights.iter().map(|&h| (h as f32 - mean_h).powi(2)).sum::<f32>() / BOARD_WIDTH as f32;
+    let height_variance_penalty = (height_var / 25.0).min(1.0);
+
+    // 19. HeightRisk (危険高度急増ペナルティ: 10段超えで二乗・指数関数的にペナルティ急増)
+    let height_risk = if max_h > 10.0 {
+        (((max_h - 10.0).powi(2)) / 64.0).min(1.0)
+    } else {
+        0.0f32
+    };
+
+    // 20. LowFlatBonus (低層平坦維持ボーナス: 全列6段以下で安全な低層平積み状態に大加点)
+    let low_flat_bonus = if max_h <= 6.0 {
+        (1.0f32 - (max_h / 10.0)).max(0.0)
+    } else {
+        0.0f32
+    };
+
+    // 21. Bumpiness Penalty (隣接列高低差 + 中央山型集中ペナルティ)
+    let mut bumpiness = 0;
+    for x in 0..(BOARD_WIDTH - 1) {
+        bumpiness += (heights[x] - heights[x + 1]).abs();
+    }
+    let center_convexity = crate::tetris::calculate_center_convexity(board_after_clear);
+    let bumpiness_penalty = ((bumpiness as f32 / 30.0) + center_convexity * 0.5).min(1.0);
+
+    // 22. SurfaceFlatness (接地表面平坦度ボーナス: 凹凸が少ないほど1.0に近づく)
+    let surface_flatness = 1.0f32 / (1.0f32 + (bumpiness as f32 / 5.0f32));
+
+    // 23. Well Quality (0列または9列の深さ4専用井戸、両端同時空き時はゼロ化)
+    let (is_dual_well, _dual_sev) = crate::tetris::detect_dual_side_wells(board_after_clear);
+    let well_col_0 = if heights[1] > heights[0] { heights[1] - heights[0] } else { 0 };
+    let well_col_9 = if heights[8] > heights[9] { heights[8] - heights[9] } else { 0 };
+    let max_well_depth = well_col_0.max(well_col_9) as f32;
+    let well_quality = if is_dual_well {
+        0.05
+    } else {
+        (-((max_well_depth - 4.0).powi(2)) / 8.0).exp()
+    };
+
+    // 24. Overhang Penalty (正規Tスロットは免除)
+    let mut overhangs = 0;
+    for x in 0..BOARD_WIDTH {
+        for y in 0..(INTERNAL_HEIGHT - 1) {
+            if board_after_clear[y][x].is_some() && board_after_clear[y + 1][x].is_none() {
+                overhangs += 1;
+            }
+        }
+    }
+    let effective_overhangs = (overhangs as f32 - (t_slot_count * 1.5)).max(0.0);
+    let overhang_penalty = (effective_overhangs / 8.0).min(1.0);
+
+    // 25. Future Fit Score (Next/Hold適合度、HoldT温存ボーナス、WasteT平積み浪費ペナルティ)
+    let mut future_fit = if use_hold { 0.8f32 } else { 0.7f32 };
+    if next_has_t && t_spin_terrain > 0.4 {
+        future_fit = 1.0f32;
+    }
+    if game.hold_piece == Some(BlockType::T) && t_spin_terrain > 0.3 {
+        future_fit = (future_fit + 0.2f32).min(1.0f32);
+    }
+    if placed_piece.block_type == BlockType::T && (t_slot_count > 0.0 || t_spin_terrain > 0.3) && t_spin_score == 0.0 {
+        future_fit = (future_fit - 0.85f32).max(0.0f32);
+    }
+
+    vec![
+        t_spin_score,
+        t_spin_terrain,
+        hole_penalty,
+        hole_depth_sum_penalty,
+        hole_spread_penalty,
+        placement_quality,
+        tetris_score,
+        pure_single,
+        pure_double,
+        pure_triple,
+        ren_score,
+        btb_score,
+        max_combo,
+        mean_combo,
+        pc_score,
+        aggregate_height,
+        max_height_penalty,
+        height_variance_penalty,
+        height_risk,
+        low_flat_bonus,
+        bumpiness_penalty,
+        surface_flatness,
         well_quality,
         overhang_penalty,
         future_fit,
@@ -938,7 +1245,7 @@ fn enumerate_moves_for_piece(
     }
 
     let mut temp_candidates = Vec::new();
-    let use_20_features = model.weights.len() == 20;
+    let use_extended_features = model.weights.len() >= 20;
 
     for landing in landings {
         let target_piece = landing.piece;
@@ -957,14 +1264,14 @@ fn enumerate_moves_for_piece(
             let (temp_board_after_clear, cleared) = simulate_line_clears(&temp_board);
 
             // 地形探索誘導型 悪手剪定フィルタ（戦術手・ドネイト・T-Spin・Tetrisは保護し、悪手のみを事前除外）
-            if use_20_features && should_prune_candidate(game, &temp_board_after_clear, cleared, &target_piece, was_rotate, use_hold) {
+            if use_extended_features && should_prune_candidate(game, &temp_board_after_clear, cleared, &target_piece, was_rotate, use_hold) {
                 continue;
             }
 
-            let features = if use_20_features {
-                extract_20_features(game, &temp_board_after_clear, cleared, &target_piece, use_hold, was_rotate)
-            } else {
-                extract_features(&temp_board_after_clear, cleared)
+            let features = match model.weights.len() {
+                25 => extract_25_features(game, &temp_board_after_clear, cleared, &target_piece, use_hold, was_rotate),
+                20 => extract_20_features(game, &temp_board_after_clear, cleared, &target_piece, use_hold, was_rotate),
+                _ => extract_features(&temp_board_after_clear, cleared),
             };
 
             temp_candidates.push(TempCandidate {
@@ -1021,7 +1328,7 @@ fn enumerate_moves_for_piece(
             );
         }
 
-        if !is_opening_active && !use_20_features {
+        if !is_opening_active && !use_extended_features {
             // 縦3マス以上の深い穴ボーナス
             let well_bonus_score = get_well_bonus(&c.temp_board_after_clear);
             if well_bonus_score > 0 {
@@ -1539,5 +1846,70 @@ mod tests {
         assert!(should_prune_candidate(&game, &board_after, 0, &bad_t, false, false),
             "Flat T-piece wasted on ground when T-slot is open must be PRUNED");
     }
+
+    #[test]
+    fn test_25_features_extraction() {
+        let game = Game::new();
+        let piece = Piece::new(BlockType::T);
+        let feats = extract_25_features(&game, &game.board, 0, &piece, false, false);
+        assert_eq!(feats.len(), 25, "extract_25_features must return exactly 25 feature values");
+
+        for (idx, &val) in feats.iter().enumerate() {
+            assert!(!val.is_nan(), "Feature index {} must not be NaN", idx);
+            assert!(val >= 0.0 && val <= 2.0, "Feature index {} value {} must be in valid normalized range", idx, val);
+        }
+    }
+
+    #[test]
+    fn test_height_risk_and_low_flat_bonus() {
+        let mut game = Game::new();
+        let bottom = INTERNAL_HEIGHT - 1;
+        let piece = Piece::new(BlockType::I);
+
+        // 1. Low flat field (height = 4 across all columns)
+        for y in (bottom - 3)..=bottom {
+            for x in 0..BOARD_WIDTH {
+                game.board[y][x] = Some(BlockType::I);
+            }
+        }
+        let feats_low = extract_25_features(&game, &game.board, 0, &piece, false, false);
+        assert_eq!(feats_low[18], 0.0, "HeightRisk must be 0.0 when max height <= 10");
+        assert!(feats_low[19] >= 0.5, "LowFlatBonus must be > 0.5 for clean height <= 6 (got {})", feats_low[19]);
+
+        // 2. High dangerous field (column 5 has height 16)
+        for y in (bottom - 15)..=bottom {
+            game.board[y][5] = Some(BlockType::I);
+        }
+        let feats_high = extract_25_features(&game, &game.board, 0, &piece, false, false);
+        assert!(feats_high[18] > 0.5, "HeightRisk must be > 0.5 when max height is 16 (got {})", feats_high[18]);
+        assert_eq!(feats_high[19], 0.0, "LowFlatBonus must be 0.0 when height > 6");
+    }
+
+    #[test]
+    fn test_height_variance_and_surface_flatness() {
+        let mut game = Game::new();
+        let bottom = INTERNAL_HEIGHT - 1;
+        let piece = Piece::new(BlockType::O);
+
+        // 1. Perfectly flat field
+        for x in 0..BOARD_WIDTH {
+            game.board[bottom][x] = Some(BlockType::I);
+            game.board[bottom - 1][x] = Some(BlockType::I);
+        }
+        let feats_flat = extract_25_features(&game, &game.board, 0, &piece, false, false);
+        assert_eq!(feats_flat[17], 0.0, "HeightVariance must be 0.0 for flat field");
+        assert_eq!(feats_flat[21], 1.0, "SurfaceFlatness must be 1.0 for flat field");
+
+        // 2. Spiky field (alternating heights 4 and 0)
+        for x in (0..BOARD_WIDTH).step_by(2) {
+            for y in (bottom - 3)..=bottom {
+                game.board[y][x] = Some(BlockType::I);
+            }
+        }
+        let feats_spiky = extract_25_features(&game, &game.board, 0, &piece, false, false);
+        assert!(feats_spiky[17] >= 0.04, "HeightVariance must be >= 0.04 for spiky field (got {})", feats_spiky[17]);
+        assert!(feats_spiky[21] < 0.8, "SurfaceFlatness must drop below 0.8 for spiky field (got {})", feats_spiky[21]);
+    }
 }
+
 

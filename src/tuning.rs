@@ -185,7 +185,7 @@ pub fn optimize_tspin_weights(
     let current_model = if let Some(m) = initial_model {
         m.clone()
     } else {
-        AiModel::new_20_feature_default()
+        AiModel::new_25_feature_default()
     };
 
     let (initial_fitness, init_tsd, init_tst, init_tss, init_lines) =
