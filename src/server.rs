@@ -69,6 +69,7 @@ pub async fn start_server() {
                 state.p1.current_piece.x = chosen.final_piece.x;
                 state.p1.current_piece.y = chosen.final_piece.y;
                 state.p1.current_piece.rotation = chosen.final_piece.rotation;
+                state.p1.last_action_was_rotate = chosen.was_rotate;
                 
                 state.p1.lock_piece();
                 let damage = state.p1.last_firepower;
@@ -88,6 +89,7 @@ pub async fn start_server() {
                 state.p2.current_piece.x = chosen.final_piece.x;
                 state.p2.current_piece.y = chosen.final_piece.y;
                 state.p2.current_piece.rotation = chosen.final_piece.rotation;
+                state.p2.last_action_was_rotate = chosen.was_rotate;
                 
                 state.p2.lock_piece();
                 let damage = state.p2.last_firepower;

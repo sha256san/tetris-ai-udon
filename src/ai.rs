@@ -1088,8 +1088,10 @@ pub fn simulate_future_moves(
             sim_game.hold();
         }
         sim_game.current_piece.x = best_move.final_piece.x;
+        sim_game.current_piece.y = best_move.final_piece.y;
         sim_game.current_piece.rotation = best_move.final_piece.rotation;
-        sim_game.hard_drop();
+        sim_game.last_action_was_rotate = best_move.was_rotate;
+        sim_game.lock_piece();
 
         current_turn += 1;
     }

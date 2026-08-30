@@ -465,7 +465,13 @@ fn run_ai_mode(
                 crate::ai::MoveAction::MoveLeft => { game.try_move(-1, 0); }
                 crate::ai::MoveAction::MoveRight => { game.try_move(1, 0); }
                 crate::ai::MoveAction::SoftDrop => { game.try_move(0, 1); }
-                crate::ai::MoveAction::HardDrop => { game.hard_drop(); }
+                crate::ai::MoveAction::HardDrop => {
+                    // ハードドロップ描画フレーム: 目標地点へ降下（lock_pieceはここでは呼ばず二重配置を完全防止）
+                    game.current_piece.x = best_move.final_piece.x;
+                    game.current_piece.y = best_move.final_piece.y;
+                    game.current_piece.rotation = best_move.final_piece.rotation;
+                    game.last_action_was_rotate = best_move.was_rotate;
+                }
                 crate::ai::MoveAction::RotateCW => { game.try_rotate(RotationDirection::Clockwise); }
                 crate::ai::MoveAction::RotateCCW => { game.try_rotate(RotationDirection::CounterClockwise); }
             }
@@ -479,7 +485,7 @@ fn run_ai_mode(
         game.current_piece.rotation = best_move.final_piece.rotation;
         game.last_action_was_rotate = best_move.was_rotate;
 
-        // 3. ミノを固定しライン消去・T-Spin判定を実行
+        // 3. ミノを固定しライン消去・T-Spin判定・ネクストミノスポーンを実行（1手につき1回のみ確実に実行）
         game.lock_piece();
 
         // オープニングシーケンスが有効な間はターンを進める
