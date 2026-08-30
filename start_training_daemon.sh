@@ -1,13 +1,15 @@
 #!/bin/bash
 # ==============================================================================
 # Start Parallel Training as a Background Daemon (Immune to SSH Disconnect)
-# Usage: ./start_training_daemon.sh [OPTIONAL: ITERS_PER_WORKER (default: 500)]
+# Usage: ./start_training_daemon.sh [ITERS_PER_WORKER (default: 500)] [REPEAT_ROUNDS (default: 0 = endless)]
 # Examples:
-#   ./start_training_daemon.sh       # 4 workers x 500 iters/round
-#   ./start_training_daemon.sh 100   # 4 workers x 100 iters/round
+#   ./start_training_daemon.sh 100 5    # 100 iters x 4 workers, repeated 5 rounds
+#   ./start_training_daemon.sh 500 10   # 500 iters x 4 workers, repeated 10 rounds
+#   ./start_training_daemon.sh 100      # 100 iters x 4 workers, endless loop
 # ==============================================================================
 
 ITERS=${1:-500}
+MAX_ROUNDS=${2:-0}
 LOG_FILE="logs/training_runner.log"
 PID_FILE=".training_daemon_pid"
 
@@ -40,11 +42,17 @@ echo "================================================================="
 echo "  🚀 Starting Tetris AI Parallel Training Daemon"
 echo "  Workers: 4 parallel instances"
 echo "  Iterations per Worker per Round: $ITERS"
+if [ "$MAX_ROUNDS" -gt 0 ]; then
+echo "  Repeat Count: $MAX_ROUNDS rounds (Total Games: $((4 * ITERS * MAX_ROUNDS)))"
+else
+echo "  Repeat Count: Endless Loop (until ./stop_parallel_training.sh)"
+fi
+echo "  Auto Memory Cleanup: 100% process heap freed after each round"
 echo "  SSH Disconnect Protection: Active (nohup + SIGHUP ignored)"
 echo "================================================================="
 
 # Start runner in background with nohup and disown
-nohup ./run_parallel_training.sh "$ITERS" > "$LOG_FILE" 2>&1 &
+nohup ./run_parallel_training.sh "$ITERS" "$MAX_ROUNDS" > "$LOG_FILE" 2>&1 &
 DAEMON_PID=$!
 echo "$DAEMON_PID" > "$PID_FILE"
 disown $DAEMON_PID 2>/dev/null

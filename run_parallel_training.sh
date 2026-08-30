@@ -1,14 +1,15 @@
 #!/bin/bash
 # ==============================================================================
 # 4-Worker Parallel Tuning Batch Runner
-# Usage: ./run_parallel_training.sh [OPTIONAL: ITERS_PER_WORKER (default: 500)]
+# Usage: ./run_parallel_training.sh [ITERS_PER_ROUND] [REPEAT_ROUNDS]
 # Examples:
-#   ./run_parallel_training.sh       # 4 workers x 500 iters = 2,000 games/round
-#   ./run_parallel_training.sh 100   # 4 workers x 100 iters = 400 games/round
-#   ./run_parallel_training.sh 1000  # 4 workers x 1000 iters = 4,000 games/round
+#   ./run_parallel_training.sh 100 5    # 100 iters x 4 workers, repeated 5 rounds (Total: 2,000 games)
+#   ./run_parallel_training.sh 500 10   # 500 iters x 4 workers, repeated 10 rounds (Total: 20,000 games)
+#   ./run_parallel_training.sh 100      # 100 iters x 4 workers, repeated endlessly (0 = infinite)
 # ==============================================================================
 
 ITERS=${1:-500}
+MAX_ROUNDS=${2:-0} # 0 means infinite loop
 WORKERS=4
 ROUND=1
 PID_FILE=".training_pids"
@@ -28,9 +29,13 @@ echo "       TETRIS AI 4-WORKER PARALLEL TUNING BATCH RUNNER"
 echo "  Workers: $WORKERS parallel instances"
 echo "  Iterations per Worker per Round: $ITERS"
 echo "  Total Games per Round: $((WORKERS * ITERS))"
+if [ "$MAX_ROUNDS" -gt 0 ]; then
+echo "  Repeat Count: $MAX_ROUNDS rounds (Total Games: $((WORKERS * ITERS * MAX_ROUNDS)))"
+else
+echo "  Repeat Count: Endless Loop (Press Ctrl+C or ./stop_parallel_training.sh to stop)"
+fi
+echo "  Auto Memory Cleanup: 100% process heap freed after each round"
 echo "  Auto Best Model Sync: Yes (Highest Fitness -> model.json)"
-echo "  Auto Loop across Rounds: Yes (Round 1 -> Round 2 -> Round 3 ...)"
-echo "  Stop command: ./stop_parallel_training.sh or Ctrl+C"
 echo "================================================================="
 
 # Ignore SIGHUP explicitly so SSH disconnection will NOT kill the training loop
@@ -60,7 +65,11 @@ cargo build --release || { echo "[Error] Build failed!"; rm -f "$PID_FILE"; exit
 while true; do
     echo ""
     echo "================================================================="
+    if [ "$MAX_ROUNDS" -gt 0 ]; then
+    echo "  🚀 Starting Round #$ROUND / $MAX_ROUNDS ($WORKERS Workers x $ITERS Iterations)"
+    else
     echo "  🚀 Starting Round #$ROUND ($WORKERS Workers x $ITERS Iterations)"
+    fi
     echo "  Time: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "================================================================="
 
@@ -113,6 +122,7 @@ while true; do
 
     echo ""
     echo "[Complete] All $WORKERS workers finished Round #$ROUND ($((WORKERS * ITERS)) total iterations)!"
+    echo "[Memory] All 4 worker processes terminated. Heap memory 100% reclaimed by OS."
 
     # Evaluate best model and promote to model.json
     python3 scripts/merge_best_worker.py
@@ -120,6 +130,16 @@ while true; do
     echo "================================================================="
     echo "  ✅ Round #$ROUND finished successfully!"
     echo "  model.json updated with best weights."
+
+    # Check if max rounds reached
+    if [ "$MAX_ROUNDS" -gt 0 ] && [ "$ROUND" -ge "$MAX_ROUNDS" ]; then
+        echo "  🏁 Reached specified repeat count ($MAX_ROUNDS rounds completed)!"
+        echo "  All training processes completed. Exiting cleanly."
+        echo "================================================================="
+        rm -f "$PID_FILE"
+        break
+    fi
+
     echo "  🚀 Automatically proceeding to Round #$((ROUND + 1)) in 2 seconds..."
     echo "================================================================="
     sleep 2
