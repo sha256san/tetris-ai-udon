@@ -52,6 +52,18 @@ pub mod heuristic {
     /// T-Spin Mini無駄打ちペナルティ（本命火力に繋がらない単発Miniの抑制）
     pub const WASTED_TSPIN_MINI_PENALTY: f32 = -30.0;
 
+    /// 壁端の背面TST（Reverse Wall TST）ペナルティ（SRSキック困難かつ盤面破壊の抑制）
+    pub const WALL_REVERSE_TST_PENALTY: f32 = -80.0;
+
+    /// 下穴埋まりドネイト（Buried Hole Donation）ペナルティ（下穴1マスあたりの減点）
+    pub const BURIED_HOLE_DONATION_PENALTY: f32 = -25.0;
+
+    /// 地形探索誘導型 悪手剪定アルゴリズムの最大候補保持数（対局時 / リアルタイム）
+    pub const TERRAIN_PRUNING_TOP_K_PLAY: usize = 16;
+
+    /// 地形探索誘導型 悪手剪定アルゴリズムの最大候補保持数（事前学習時 / Tuning）
+    pub const TERRAIN_PRUNING_TOP_K_TUNING: usize = 24;
+
     /// 先読みシミュレーションにおける将来スコアの割引率
     pub const LOOKAHEAD_DISCOUNT_FACTOR: f32 = 0.7;
 }

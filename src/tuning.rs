@@ -37,7 +37,8 @@ pub fn evaluate_tspin_fitness(model: &AiModel, seeds: &[u64], max_pieces: usize)
         let mut pieces = 0;
 
         while !game.game_over && pieces < max_pieces {
-            let candidates = crate::ai::beam_search(&game, model, 2, 12, None, 0);
+            // addplan5: 5手先読み（Depth 5, Beam Width TERRAIN_PRUNING_TOP_K_TUNING）でロングレンジ戦術を探索
+            let candidates = crate::ai::beam_search(&game, model, 5, crate::config::heuristic::TERRAIN_PRUNING_TOP_K_TUNING, None, 0);
             if candidates.is_empty() {
                 break;
             }

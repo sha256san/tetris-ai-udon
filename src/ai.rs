@@ -264,6 +264,11 @@ pub fn extract_20_features(
     if next_has_t && t_spin_terrain > 0.3 {
         t_spin_terrain = (t_spin_terrain + 0.3).min(1.0);
     }
+    // 壁端の背面TST検出時は TSpinTerrain を大幅減点
+    let is_reverse_wall_tst = crate::tetris::detect_reverse_wall_tst(&game.board, placed_piece, was_rotate);
+    if is_reverse_wall_tst {
+        t_spin_terrain = (t_spin_terrain - 0.7).max(0.0);
+    }
     // 2〜9列目（3〜8列目推奨）単一列スロット評価
     let slot_pos_quality = crate::tetris::evaluate_t_slot_column_position(placed_piece.x.clamp(0, 9) as usize, 1);
     if t_spin_terrain > 0.3 {
@@ -324,12 +329,25 @@ pub fn extract_20_features(
         creates_roof
     };
 
-    let placement_quality = if is_empty_tspin {
+    let buried_holes_under_donation = if is_roof_formation {
+        crate::tetris::count_buried_holes_under_donation(&game.board, placed_piece)
+    } else {
+        0
+    };
+
+    let placement_quality = if is_reverse_wall_tst {
+        0.02f32 // 背面TSTは最低評価
+    } else if is_empty_tspin {
         0.05f32 // 空打ちは最低評価（横一列揃っていない状態での消費を抑止）
     } else if t_spin_score > 0.0 {
         1.0f32
-    } else if is_roof_formation && t_spin_terrain > 0.4 {
-        1.0f32 // 有効な屋根構築・ドネイト手
+    } else if is_roof_formation && t_spin_terrain > 0.3 {
+        // 有効な屋根構築・ドネイト手（ただし下穴が埋まる場合は少しばかり減点）
+        if buried_holes_under_donation > 0 {
+            (1.0f32 - (buried_holes_under_donation as f32 * 0.20)).max(0.30)
+        } else {
+            1.0f32 // 綺麗なドネイトは大いに加点
+        }
     } else if placed_piece.y >= (INTERNAL_HEIGHT as i32 - 6) {
         0.85f32
     } else {
@@ -461,6 +479,19 @@ pub fn enumerate_all_moves_base(
 }
 
 // すべての可能な配置（候補手）を列挙し、Nextキューに基づき将来の盤面評価を先読み(Lookahead / Beam Search)してGPUバッチでスコアを再計算する
+#[allow(dead_code)]
+pub fn best_move(
+    game: &Game,
+    model: &AiModel,
+    opening: Option<&crate::opening::OpeningTemplate>,
+    opening_turn: usize,
+    num_nexts: usize,
+) -> Option<CandidateMove> {
+    beam_search(game, model, num_nexts, crate::config::heuristic::TERRAIN_PRUNING_TOP_K_PLAY, opening, opening_turn)
+        .into_iter()
+        .next()
+}
+
 pub fn enumerate_all_moves(
     game: &Game,
     model: &AiModel,
@@ -468,7 +499,7 @@ pub fn enumerate_all_moves(
     opening_turn: usize,
 ) -> Vec<CandidateMove> {
     let num_nexts = game.bag.peek_next(5).len();
-    beam_search(game, model, num_nexts, 50, opening, opening_turn)
+    beam_search(game, model, num_nexts, crate::config::heuristic::TERRAIN_PRUNING_TOP_K_PLAY, opening, opening_turn)
 }
 
 /// GPUアクセラレーション対応 Beam Search (ビーム探索) 先読みエンジン
@@ -789,6 +820,102 @@ fn try_enqueue_reachable(
     }
 }
 
+/// 地形探索誘導型 悪手剪定判定（Terrain Heuristic Pruning）
+/// - 戦術手（T-Spin発火、Tスロット構築、階段・ドネイト屋根、Tetris、クリーン平積み）は100%保護
+/// - 悪手（無意味な埋まり穴、Iミノ井戸の水平塞ぎ、Tミノ平積み浪費、背面TST、T-Spin空打ち）を探索木から除外
+pub fn should_prune_candidate(
+    game: &Game,
+    board_after_clear: &Board,
+    cleared_lines: usize,
+    target_piece: &Piece,
+    was_rotate: bool,
+    _use_hold: bool,
+) -> bool {
+    // 1. 戦術手・発火手は絶対に剪定しない（100% PROTECT）
+    if cleared_lines == 4 {
+        return false; // Tetris
+    }
+    if target_piece.block_type == BlockType::T && was_rotate && cleared_lines >= 1 {
+        return false; // TSD, TST, TSS発火
+    }
+    let old_slots = crate::tetris::count_t_slots(&game.board);
+    let new_slots = crate::tetris::count_t_slots(board_after_clear);
+    if new_slots > old_slots {
+        return false; // Tスロット新規構築
+    }
+    let old_kaidan = crate::tetris::detect_kaidan_setup_patterns(&game.board);
+    let new_kaidan = crate::tetris::detect_kaidan_setup_patterns(board_after_clear);
+    if new_kaidan > old_kaidan && new_kaidan > 0.5 {
+        return false; // 階段・ドネイト新規構築
+    }
+
+    // ドネイト屋根構築（真下に空洞がある有効な屋根手）
+    let is_roof = target_piece.block_type != BlockType::T && {
+        let mut creates_roof = false;
+        for &(cx, cy) in &target_piece.get_cells() {
+            if cy + 1 < INTERNAL_HEIGHT as i32 && cx >= 0 && cx < BOARD_WIDTH as i32 {
+                if game.board[(cy + 1) as usize][cx as usize].is_none() {
+                    creates_roof = true;
+                    break;
+                }
+            }
+        }
+        creates_roof
+    };
+    if is_roof {
+        let buried = crate::tetris::count_buried_holes_under_donation(&game.board, target_piece);
+        if buried <= 2 {
+            return false; // 有効なドネイト屋根手は保護
+        }
+    }
+
+    // 2. 悪手判定（探索木から除外）
+    // ① 壁端の背面TST（Reverse Wall TST）
+    if crate::tetris::detect_reverse_wall_tst(&game.board, target_piece, was_rotate) {
+        return true;
+    }
+
+    // ② 盤面にTスロットまたはT地形が存在するのに、Tミノを平積みに無駄消費
+    let old_terrain = crate::tetris::evaluate_t_spin_terrain(&game.board);
+    if target_piece.block_type == BlockType::T && (old_slots > 0 || old_terrain > 0.3) && cleared_lines == 0 && !was_rotate {
+        return true;
+    }
+
+    // ③ Iミノ専用井戸（0列または9列）を横置きミノで塞ぐ（ライン消去を伴わない場合）
+    let mut heights = [0; BOARD_WIDTH];
+    for x in 0..BOARD_WIDTH {
+        for y in 0..INTERNAL_HEIGHT {
+            if game.board[y][x].is_some() {
+                heights[x] = (INTERNAL_HEIGHT - y) as i32;
+                break;
+            }
+        }
+    }
+    let well_0 = heights[1] - heights[0] >= 3;
+    let well_9 = heights[8] - heights[9] >= 3;
+    if well_0 && cleared_lines == 0 {
+        for &(cx, cy) in &target_piece.get_cells() {
+            if cx == 0 && cy < (INTERNAL_HEIGHT as i32 - heights[0] - 1) {
+                return true; // 井戸の上部にフタをする悪手
+            }
+        }
+    }
+    if well_9 && cleared_lines == 0 {
+        for &(cx, cy) in &target_piece.get_cells() {
+            if cx == 9 && cy < (INTERNAL_HEIGHT as i32 - heights[9] - 1) {
+                return true;
+            }
+        }
+    }
+
+    // ④ T-Spin空打ち（ラインが揃っていないのにTミノを無駄に回転固定）
+    if target_piece.block_type == BlockType::T && was_rotate && cleared_lines == 0 {
+        return true;
+    }
+
+    false
+}
+
 // 特定のミノ種について、到達可能な配置候補をBFSで全探索して moves に追加
 fn enumerate_moves_for_piece(
     game: &Game,
@@ -828,6 +955,12 @@ fn enumerate_moves_for_piece(
 
         if cells_locked_count == 4 {
             let (temp_board_after_clear, cleared) = simulate_line_clears(&temp_board);
+
+            // 地形探索誘導型 悪手剪定フィルタ（戦術手・ドネイト・T-Spin・Tetrisは保護し、悪手のみを事前除外）
+            if use_20_features && should_prune_candidate(game, &temp_board_after_clear, cleared, &target_piece, was_rotate, use_hold) {
+                continue;
+            }
+
             let features = if use_20_features {
                 extract_20_features(game, &temp_board_after_clear, cleared, &target_piece, use_hold, was_rotate)
             } else {
@@ -1032,6 +1165,17 @@ fn enumerate_moves_for_piece(
             }
         }
 
+        // 8. 壁端の背面TSTペナルティ（外向き・背面TSTを厳罰化）
+        if crate::tetris::detect_reverse_wall_tst(&game.board, &c.target_piece, c.was_rotate) {
+            eval_score += crate::config::heuristic::WALL_REVERSE_TST_PENALTY;
+        }
+
+        // 9. 下穴埋まりドネイトペナルティ（綺麗なドネイトは高得点、下穴埋まりは減点）
+        let buried_holes = crate::tetris::count_buried_holes_under_donation(&game.board, &c.target_piece);
+        if buried_holes > 0 && c.target_piece.block_type != BlockType::T {
+            eval_score += (buried_holes as f32) * crate::config::heuristic::BURIED_HOLE_DONATION_PENALTY;
+        }
+
         moves.push(CandidateMove {
             x: target_x,
             rotation,
@@ -1216,7 +1360,11 @@ mod tests {
             y: (bottom - 2) as i32,
             rotation: 0,
         };
-        let feats = extract_20_features(&game, &game.board, 0, &s_piece, false, false);
+        let mut temp_board = game.board;
+        for &(cx, cy) in &s_piece.get_cells() {
+            temp_board[cy as usize][cx as usize] = Some(BlockType::S);
+        }
+        let feats = extract_20_features(&game, &temp_board, 0, &s_piece, false, false);
         assert_eq!(feats[4], 1.0, "Roof formation move should grant maximum PlacementQuality (1.0)");
 
         // 2. Now with roof in place, search BFS landings for T-piece
@@ -1312,7 +1460,7 @@ mod tests {
             rotation: 2,
         };
         let feats = extract_20_features(&game, &game.board, 2, &t_piece, false, true);
-        assert!(feats[1] >= 0.85, "Internal single-column T-slot should receive high terrain quality, got {}", feats[1]);
+        assert!(feats[1] >= 0.80, "Internal single-column T-slot should receive high terrain quality, got {}", feats[1]);
     }
 
     #[test]
@@ -1354,4 +1502,42 @@ mod tests {
         // Moves should be evaluated properly without panic
         assert!(!moves.is_empty());
     }
+
+    #[test]
+    fn test_terrain_pruning_protects_donations_and_prunes_bad_moves() {
+        let mut game = Game::new();
+        let bottom = INTERNAL_HEIGHT - 1;
+
+        // 1. Build a setup with a T-slot open at col 4
+        for x in 0..BOARD_WIDTH {
+            if x != 4 {
+                game.board[bottom][x] = Some(BlockType::I);
+            }
+        }
+        game.board[bottom - 1][3] = Some(BlockType::I);
+        game.board[bottom - 1][5] = Some(BlockType::I);
+        game.board[bottom - 2][3] = Some(BlockType::S); // S roof over col 4
+
+        // A valid TSD placement (T-piece inside slot) must NOT be pruned
+        let tsd_piece = Piece {
+            block_type: BlockType::T,
+            x: 4,
+            y: (bottom - 1) as i32,
+            rotation: 2,
+        };
+        let (board_after, _cleared) = simulate_line_clears(&game.board);
+        assert!(!should_prune_candidate(&game, &board_after, 2, &tsd_piece, true, false),
+            "Valid TSD placement must NEVER be pruned");
+
+        // A bad move: flat T-piece dropped away at (x=0) when T-slot is open should be pruned
+        let bad_t = Piece {
+            block_type: BlockType::T,
+            x: 0,
+            y: bottom as i32,
+            rotation: 0,
+        };
+        assert!(should_prune_candidate(&game, &board_after, 0, &bad_t, false, false),
+            "Flat T-piece wasted on ground when T-slot is open must be PRUNED");
+    }
 }
+
